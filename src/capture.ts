@@ -106,6 +106,13 @@ export class MeetingRecorder {
   private ranMs = 0
   private mark = 0
   private ear: LiveEar
+  private liveCtx: AudioContext | null = null
+  private speech: SpeechRecognitionLike | null = null
+  private wantSpeech = false
+  private speechHeard = false
+  private speechFails = 0
+  private interimSpeech = ''
+  private restartTimer = 0
   private recorder: MediaRecorder | null = null
   private stream: MediaStream | null = null
   private audio: AudioContext | null = null
@@ -126,16 +133,18 @@ export class MeetingRecorder {
     this.listener = listener
     this.ear = new LiveEar({
       onPartial: (text) => {
-        if (this.phase !== 'live') return
+        if (this.phase !== 'live' || this.speechHeard) return
         this.markHeard()
         this.emitText(text)
       },
       onFinal: (text) => {
+        if (this.speechHeard) return
         this.commitHeard(text)
         this.emitText('')
       },
       onStatus: (note) => {
         if (this.phase === 'idle') return
+        if (this.speech && note.includes('準備')) return
         this.listener.onNote(note)
       },
     })
@@ -151,12 +160,18 @@ export class MeetingRecorder {
     this.ranMs = 0
     this.lastVoiceAt = 0
     this.heardSpeech = false
+    this.speechHeard = false
+    this.speechFails = 0
+    this.interimSpeech = ''
     this.phase = 'live'
     this.mark = performance.now()
+    this.primeAudio()
+    this.wantSpeech = true
+    this.openSpeech()
     this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
     this.emitPhase()
     this.emitText('')
-    this.listener.onNote('文字起こしの準備をしています。')
+    this.listener.onNote(this.speech ? '話した言葉を、文字起こし欄へ順に出します。' : '文字起こしの準備をしています。')
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -183,7 +198,7 @@ export class MeetingRecorder {
       this.failStart()
       return '音声ファイルを作れませんでした。もう一度押すか、文字を貼り付けてください。'
     }
-    this.ear.open(stream)
+    this.ear.open(stream, this.liveCtx)
     document.addEventListener('visibilitychange', this.onVisible)
     void this.claimWake()
     this.pumpLevel()
@@ -191,9 +206,12 @@ export class MeetingRecorder {
   }
 
   private failStart(): void {
+    this.wantSpeech = false
     this.phase = 'idle'
     this.clearTimers()
+    this.stopSpeech()
     this.ear.release()
+    this.closeLiveCtx()
     this.recorder = null
     this.releaseHardware()
     document.removeEventListener('visibilitychange', this.onVisible)
@@ -205,6 +223,9 @@ export class MeetingRecorder {
     if (this.phase !== 'live') return
     this.ranMs += performance.now() - this.mark
     this.phase = 'paused'
+    this.wantSpeech = false
+    this.stopSpeech()
+    this.emitText('')
     this.ear.pause()
     if (this.recorder?.state === 'recording' && typeof this.recorder.pause === 'function') this.recorder.pause()
     this.emitPhase()
@@ -216,6 +237,9 @@ export class MeetingRecorder {
     this.phase = 'live'
     this.mark = performance.now()
     if (this.recorder?.state === 'paused' && typeof this.recorder.resume === 'function') this.recorder.resume()
+    this.wantSpeech = true
+    this.speechFails = 0
+    this.openSpeech()
     this.ear.resume()
     this.emitPhase()
   }
@@ -223,8 +247,11 @@ export class MeetingRecorder {
   async stop(): Promise<void> {
     if (this.phase === 'idle') return
     if (this.phase === 'live') this.ranMs += performance.now() - this.mark
+    this.wantSpeech = false
     this.clearTimers()
+    this.stopSpeech()
     await this.ear.close()
+    this.closeLiveCtx()
     this.generation += 1
     this.phase = 'idle'
     const take = await this.finishRecorder()
@@ -239,9 +266,12 @@ export class MeetingRecorder {
 
   destroy(): void {
     this.generation += 1
+    this.wantSpeech = false
     this.phase = 'idle'
     this.clearTimers()
+    this.stopSpeech()
     this.ear.shutdown()
+    this.closeLiveCtx()
     try {
       if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop()
     } catch {
@@ -253,10 +283,105 @@ export class MeetingRecorder {
   }
 
   private destroyQuiet(): void {
+    this.wantSpeech = false
     this.clearTimers()
+    this.stopSpeech()
     this.ear.release()
+    this.closeLiveCtx()
     this.recorder = null
     this.releaseHardware()
+  }
+
+  private primeAudio(): void {
+    if (this.liveCtx && this.liveCtx.state !== 'closed') {
+      void this.liveCtx.resume()
+      return
+    }
+    const Ctx = window.AudioContext
+    if (!Ctx) return
+    try {
+      this.liveCtx = new Ctx()
+      void this.liveCtx.resume()
+    } catch {
+      this.liveCtx = null
+    }
+  }
+
+  private closeLiveCtx(): void {
+    const ctx = this.liveCtx
+    this.liveCtx = null
+    void ctx?.close()
+  }
+
+  private openSpeech(): void {
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!Ctor || this.speech || !this.wantSpeech || this.phase !== 'live') return
+    const recognition = new Ctor()
+    recognition.lang = 'ja-JP'
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.onresult = (event) => {
+      let finals = ''
+      let interim = ''
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const piece = event.results[i][0]?.transcript ?? ''
+        if (event.results[i].isFinal) finals += piece
+        else interim += piece
+      }
+      if (finals || interim) {
+        this.speechHeard = true
+        this.speechFails = 0
+        this.markHeard()
+      }
+      if (finals) {
+        this.commitHeard(finals)
+        this.interimSpeech = ''
+      }
+      this.interimSpeech = interim
+      this.emitText(interim)
+    }
+    recognition.onerror = (event) => {
+      if (event.error === 'no-speech' || event.error === 'aborted') return
+      this.speechFails += 1
+      if (this.speechFails >= 2) this.wantSpeech = false
+    }
+    recognition.onend = () => {
+      if (this.interimSpeech) {
+        this.commitHeard(this.interimSpeech)
+        this.interimSpeech = ''
+        this.emitText('')
+      }
+      this.speech = null
+      if (!this.wantSpeech || this.phase !== 'live' || this.speechFails >= 2) return
+      this.restartTimer = window.setTimeout(() => this.openSpeech(), this.speechFails > 0 ? 1000 : 300)
+    }
+    try {
+      recognition.start()
+    } catch {
+      this.wantSpeech = false
+      return
+    }
+    this.speech = recognition
+  }
+
+  private stopSpeech(): void {
+    window.clearTimeout(this.restartTimer)
+    this.restartTimer = 0
+    if (this.interimSpeech) {
+      this.commitHeard(this.interimSpeech)
+      this.interimSpeech = ''
+    }
+    const speech = this.speech
+    this.speech = null
+    if (!speech) return
+    try {
+      speech.onend = null
+      speech.onresult = null
+      speech.onerror = null
+      speech.abort()
+    } catch {
+      /* すでに止まっている */
+    }
   }
 
   private openRecorder(stream: MediaStream): void {
@@ -315,7 +440,10 @@ export class MeetingRecorder {
     const clean = text.trim()
     if (!clean) return
     const now = performance.now()
-    this.base = appendPiece(this.base, clean, this.lastVoiceAt ? now - this.lastVoiceAt : 0)
+    const gap = this.lastVoiceAt ? now - this.lastVoiceAt : 0
+    if (!this.base.trim()) this.base = clean
+    else if (gap >= PAUSE_BREAK_MS && !this.base.endsWith('\n')) this.base = `${this.base}\n${clean}`
+    else this.base = appendRecognized(this.base, clean)
     this.lastVoiceAt = now
     this.markHeard()
   }
@@ -395,6 +523,8 @@ export class MeetingRecorder {
 
   private clearTimers(): void {
     window.clearInterval(this.clockTimer)
+    window.clearTimeout(this.restartTimer)
     this.clockTimer = 0
+    this.restartTimer = 0
   }
 }

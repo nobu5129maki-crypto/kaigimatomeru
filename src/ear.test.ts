@@ -30,9 +30,9 @@ describe('端末内の文字起こし', () => {
   })
 
   it('話している途中は欄へ出し、間が空いたら確定する', () => {
-    expect(decideEar({ pending: true, speechMs: 2500, silenceMs: 0, sincePartialMs: 2500 })).toBe('partial')
-    expect(decideEar({ pending: true, speechMs: 3000, silenceMs: 1700, sincePartialMs: 1700 })).toBe('final')
+    expect(decideEar({ pending: true, speechMs: 1300, silenceMs: 0, sincePartialMs: 1300 })).toBe('partial')
+    expect(decideEar({ pending: true, speechMs: 2100, silenceMs: 0, sincePartialMs: 100 })).toBe('final')
+    expect(decideEar({ pending: true, speechMs: 500, silenceMs: 800, sincePartialMs: 800 })).toBe('final')
     expect(decideEar({ pending: false, speechMs: 0, silenceMs: 0, sincePartialMs: 0 })).toBe('wait')
-    expect(decideEar({ pending: true, speechMs: 16000, silenceMs: 0, sincePartialMs: 100 })).toBe('final')
   })
 })

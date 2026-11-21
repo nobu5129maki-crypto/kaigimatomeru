@@ -60,9 +60,9 @@ export function decideEar(input: {
   sincePartialMs: number
 }): 'wait' | 'partial' | 'final' {
   if (!input.pending) return 'wait'
-  if (input.speechMs >= 15000) return 'final'
-  if (input.silenceMs >= 1600 && input.speechMs >= 450) return 'final'
-  if (input.silenceMs < 700 && input.speechMs >= 1200 && input.sincePartialMs >= 2200) return 'partial'
+  if (input.silenceMs >= 700 && input.speechMs >= 300) return 'final'
+  if (input.speechMs >= 2000) return 'final'
+  if (input.silenceMs < 400 && input.speechMs >= 700 && input.sincePartialMs >= 1200) return 'partial'
   return 'wait'
 }
 
@@ -92,7 +92,8 @@ export class LiveEar {
   private speechMs = 0
   private silenceMs = 0
   private sincePartialMs = 0
-  private floor = 0.012
+  private floor = 0.008
+  private ownsContext = false
   private speaking = false
   private paused = false
   private queue: EarJob[] = []
@@ -108,29 +109,35 @@ export class LiveEar {
     this.hooks = hooks
   }
 
-  open(stream: MediaStream): void {
-    this.releaseAudio()
+  open(stream: MediaStream, shared?: AudioContext | null): void {
+    this.disconnectNodes()
     this.paused = false
     this.ensureWorker()
     if (this.failed) return
     if (this.ready) this.hooks.onStatus('話した言葉を、文字起こし欄へ順に出します。')
     else this.hooks.onStatus('文字起こしの準備をしています。')
     const Ctx = window.AudioContext
-    if (!Ctx) {
-      this.fail()
-      return
-    }
-    let ctx: AudioContext
-    try {
-      ctx = new Ctx({ sampleRate: TARGET_RATE })
-    } catch {
-      ctx = new Ctx()
+    let ctx = shared && shared.state !== 'closed' ? shared : null
+    if (!ctx) {
+      if (!Ctx) {
+        this.fail()
+        return
+      }
+      try {
+        ctx = new Ctx()
+      } catch {
+        this.fail()
+        return
+      }
+      this.ownsContext = true
+    } else {
+      this.ownsContext = false
     }
     void ctx.resume()
     const source = ctx.createMediaStreamSource(stream)
     const processor = ctx.createScriptProcessor(4096, 1, 1)
     const mute = ctx.createGain()
-    mute.gain.value = 0
+    mute.gain.value = 0.00001
     processor.onaudioprocess = (event) => {
       const channel = event.inputBuffer.getChannelData(0)
       this.push(downsample(channel, ctx.sampleRate, TARGET_RATE))
@@ -157,7 +164,7 @@ export class LiveEar {
   async close(): Promise<void> {
     this.paused = true
     if (this.sampleCount > 0) this.flush(true)
-    this.releaseAudio()
+    this.disconnectNodes()
     const started = Date.now()
     while ((this.busy || this.queue.length > 0) && Date.now() - started < 15000) {
       await new Promise((resolve) => setTimeout(resolve, 80))
@@ -168,7 +175,7 @@ export class LiveEar {
     this.paused = true
     this.queue = []
     this.resetUtterance()
-    this.releaseAudio()
+    this.disconnectNodes()
   }
 
   shutdown(): void {
@@ -248,7 +255,7 @@ export class LiveEar {
     if (this.paused) return
     const rms = pcmEnergy(frame)
     const frameMs = (frame.length / TARGET_RATE) * 1000
-    const loud = rms >= Math.max(0.018, this.floor * 2.6)
+    const loud = rms >= Math.max(0.01, this.floor * 2.2)
     if (!loud && !this.speaking) {
       this.floor = this.floor * 0.92 + rms * 0.08
       return
@@ -279,14 +286,33 @@ export class LiveEar {
   }
 
   private flush(final: boolean): void {
-    if (this.sampleCount < TARGET_RATE * 0.4) {
+    if (this.sampleCount < TARGET_RATE * 0.35) {
       if (final) this.resetUtterance()
       return
     }
     const pcm = concatFloats(this.chunks)
-    if (final) this.resetUtterance()
-    else this.sincePartialMs = 0
-    this.enqueue(pcm, final)
+    const slice = final && this.silenceMs < 700
+    if (!final) {
+      this.sincePartialMs = 0
+      this.enqueue(pcm, false)
+      return
+    }
+    if (!slice) {
+      this.resetUtterance()
+      this.enqueue(pcm, true)
+      return
+    }
+    const tailCount = Math.min(pcm.length, Math.floor(TARGET_RATE * 0.35))
+    const send = pcm.slice(0, pcm.length - tailCount)
+    const tail = pcm.slice(pcm.length - tailCount)
+    this.resetUtterance()
+    if (tail.length > 0) {
+      this.chunks = [tail]
+      this.sampleCount = tail.length
+      this.speaking = true
+      this.speechMs = (tail.length / TARGET_RATE) * 1000
+    }
+    if (send.length >= TARGET_RATE * 0.35) this.enqueue(send, true)
   }
 
   private resetUtterance(): void {
@@ -315,15 +341,15 @@ export class LiveEar {
     this.worker.postMessage({ type: 'hear', id: job.id, pcm: copy, final: job.final }, [copy.buffer])
   }
 
-  private releaseAudio(): void {
+  private disconnectNodes(): void {
     this.processor?.disconnect()
     this.source?.disconnect()
     this.mute?.disconnect()
     this.processor = null
     this.source = null
     this.mute = null
-    const ctx = this.ctx
+    if (this.ownsContext) void this.ctx?.close()
     this.ctx = null
-    void ctx?.close()
+    this.ownsContext = false
   }
 }

@@ -28,7 +28,7 @@ function warm(): Promise<void> {
   if (transcriber) return Promise.resolve()
   if (warming) return warming
   warming = (async () => {
-    const created = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base', {
+    const created = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
       device: 'wasm',
       progress_callback: reportProgress,
     })
