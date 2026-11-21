@@ -13,6 +13,11 @@
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <title>会議まとめ</title>
+    <script>
+      if (location.protocol === 'http:' && /(^|\.)xsrv\.jp$/.test(location.hostname)) {
+        location.replace('https://' + location.host + location.pathname + location.search + location.hash)
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

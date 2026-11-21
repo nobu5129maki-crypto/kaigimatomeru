@@ -9,4 +9,10 @@ export default defineConfig({
   test: {
     environment: 'node',
   },
+  optimizeDeps: {
+    exclude: ['@huggingface/transformers'],
+  },
+  worker: {
+    format: 'es',
+  },
 })

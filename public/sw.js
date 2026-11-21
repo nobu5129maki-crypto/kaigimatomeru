@@ -1,4 +1,4 @@
-const CACHE = 'kaigimatomeru-v6'
+const CACHE = 'kaigimatomeru-v7'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
@@ -18,6 +18,11 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+
+  if (url.pathname.endsWith('/sw.js')) {
+    event.respondWith(fetch(request).catch(() => caches.match('./sw.js').then((cached) => cached || Response.error())))
+    return
+  }
 
   const isPage = request.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html')
   if (isPage) {
