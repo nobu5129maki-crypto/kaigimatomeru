@@ -1,4 +1,5 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
+import { audioFileName, formatClock, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
 import { decodeTextFile, transcriptFromFile } from './importText'
 import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from './sample'
@@ -35,11 +36,6 @@ function todayIso(): string {
   const month = String(now.getMonth() + 1).padStart(2, '0')
   const day = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
-}
-
-function clock(total: number): string {
-  const safe = Math.max(0, total)
-  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`
 }
 
 function isLength(value: unknown): value is LengthId {
@@ -87,15 +83,6 @@ function loadPref(): Pref {
   }
 }
 
-function speechErrorMessage(code: string): string {
-  if (code === 'not-allowed' || code === 'service-not-allowed') {
-    return 'マイクがブロックされています。ブラウザの設定で許可するか、文字を貼り付けてください。'
-  }
-  if (code === 'audio-capture') return 'マイクが見つかりません。文字を貼り付けてください。'
-  if (code === 'network') return '音声認識に通信が必要です。ここまでの文字は残しています。'
-  return '音声認識を続けられませんでした。入った文字はそのまま使えます。'
-}
-
 async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -137,9 +124,12 @@ export function App() {
   const [attendees, setAttendees] = useState('')
   const [transcript, setTranscript] = useState('')
   const [interim, setInterim] = useState('')
-  const [recording, setRecording] = useState(false)
+  const [phase, setPhase] = useState<RecorderPhase>('idle')
   const [elapsed, setElapsed] = useState(0)
   const [recError, setRecError] = useState('')
+  const [recNote, setRecNote] = useState('')
+  const [audioUrl, setAudioUrl] = useState('')
+  const [audioExt, setAudioExt] = useState('webm')
   const [length, setLength] = useState<LengthId>(pref.current.length)
   const [style, setStyle] = useState<StyleId>(pref.current.style)
   const [doc, setDoc] = useState<SummaryResult | null>(null)
@@ -149,14 +139,12 @@ export function App() {
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const resultRef = useRef<HTMLElement>(null)
-  const wantRec = useRef(false)
-  const recRef = useRef<SpeechRecognitionLike | null>(null)
-  const baseRef = useRef('')
-  const committedRef = useRef('')
-  const restartTimer = useRef(0)
+  const meterRef = useRef<HTMLSpanElement>(null)
+  const recorderRef = useRef<MeetingRecorder | null>(null)
+  const audioBlobRef = useRef<Blob | null>(null)
+  const audioUrlRef = useRef('')
 
-  const speechSupported =
-    typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition)
+  const micBlock = recordingBlock()
 
   useEffect(() => {
     setHistory(loadHistory())
@@ -168,16 +156,38 @@ export function App() {
   }, [length, style])
 
   useEffect(() => {
-    if (!recording) return
-    const id = window.setInterval(() => setElapsed((value) => value + 1), 1000)
-    return () => window.clearInterval(id)
-  }, [recording])
-
-  useEffect(() => {
+    const recorder = new MeetingRecorder({
+      onText: (committed, interimText) => {
+        setTranscript(committed)
+        setInterim(interimText)
+      },
+      onPhase: (next, seconds) => {
+        setPhase(next)
+        setElapsed(seconds)
+      },
+      onLevel: (level) => {
+        if (meterRef.current) meterRef.current.style.transform = `scaleX(${level.toFixed(3)})`
+      },
+      onNote: (note) => setRecNote(note),
+      onAudio: (take) => {
+        if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+        if (!take) {
+          audioBlobRef.current = null
+          audioUrlRef.current = ''
+          setAudioUrl('')
+          return
+        }
+        const url = URL.createObjectURL(take.blob)
+        audioBlobRef.current = take.blob
+        audioUrlRef.current = url
+        setAudioUrl(url)
+        setAudioExt(take.extension)
+      },
+    })
+    recorderRef.current = recorder
     return () => {
-      wantRec.current = false
-      window.clearTimeout(restartTimer.current)
-      recRef.current?.abort()
+      recorder.destroy()
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
     }
   }, [])
 
@@ -191,74 +201,43 @@ export function App() {
     }
   }
 
-  function stopRecording() {
-    wantRec.current = false
-    window.clearTimeout(restartTimer.current)
-    recRef.current?.stop()
-    setRecording(false)
-    setInterim('')
-  }
-
-  function startRecording() {
-    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!Ctor) {
-      setRecError('このブラウザは録音の文字起こしに対応していません。Chromeで開くか、文字を貼り付けてください。')
-      return
-    }
+  async function startRecording() {
     setRecError('')
     setNotice('')
-    baseRef.current = transcript.trim() ? `${transcript.replace(/\s+$/g, '')}\n` : ''
-    committedRef.current = ''
-    setElapsed(0)
-    setInterim('')
-    wantRec.current = true
+    const replacing = Boolean(audioBlobRef.current)
+    const error = (await recorderRef.current?.start(transcript)) ?? ''
+    if (error) {
+      setRecError(error)
+      return
+    }
+    if (replacing) {
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+      audioBlobRef.current = null
+      audioUrlRef.current = ''
+      setAudioUrl('')
+      setNotice('新しい録音を始めました。前の音声ファイルは置き換わりました。')
+    }
+  }
 
-    const recognition = new Ctor()
-    recognition.lang = 'ja-JP'
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.onresult = (event) => {
-      let interimText = ''
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const piece = event.results[i][0]?.transcript ?? ''
-        if (event.results[i].isFinal) committedRef.current += piece
-        else interimText += piece
-      }
-      setTranscript(baseRef.current + committedRef.current)
-      setInterim(interimText)
-    }
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech' || event.error === 'aborted') return
-      setRecError(speechErrorMessage(event.error))
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed' || event.error === 'audio-capture') {
-        wantRec.current = false
-        setRecording(false)
-      }
-    }
-    recognition.onend = () => {
-      if (!wantRec.current) {
-        setRecording(false)
-        setInterim('')
-        return
-      }
-      restartTimer.current = window.setTimeout(() => {
-        if (!wantRec.current) return
-        try {
-          recognition.start()
-        } catch {
-          wantRec.current = false
-          setRecording(false)
-        }
-      }, 250)
-    }
-    recRef.current = recognition
-    try {
-      recognition.start()
-      setRecording(true)
-    } catch {
-      wantRec.current = false
-      setRecError('録音を始められませんでした。もう一度押すか、文字を貼り付けてください。')
-    }
+  function pauseRecording() {
+    recorderRef.current?.pause()
+  }
+
+  function resumeRecording() {
+    recorderRef.current?.resume()
+  }
+
+  async function stopRecording() {
+    await recorderRef.current?.stop()
+  }
+
+  async function saveAudio() {
+    if (!audioBlobRef.current) return
+    const filename = audioFileName(title, date, audioExt)
+    const outcome = await shareFile(audioBlobRef.current, filename, '会議の録音です。')
+    if (outcome === 'cancelled') setNotice('送信をキャンセルしました。')
+    else if (outcome === 'shared') setNotice('共有シートを開きました。録音をパソコンへ送れます。')
+    else setNotice('音声ファイルを保存しました。')
   }
 
   async function readFile(file: File) {
@@ -288,7 +267,7 @@ export function App() {
   }
 
   function runSummary() {
-    if (recording) return
+    if (phase === 'live') return
     const next = summarize({ text: transcript, title, date, attendees, length, style })
     setDoc(next)
     setSigned(signatureOf({ transcript, title, date, attendees, length, style }))
@@ -368,7 +347,7 @@ export function App() {
 
   const currentSignature = signatureOf({ transcript, title, date, attendees, length, style })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
-  const canSummarize = !recording && charCount(transcript) > 0
+  const canSummarize = phase !== 'live' && charCount(transcript) > 0
   const canPoint = charCount(`${transcript}${interim}`) > 0
 
   return (
@@ -405,16 +384,27 @@ export function App() {
             </label>
           </div>
           <div className="tools">
-            {recording ? (
-              <button type="button" className="record is-on" onClick={stopRecording} aria-pressed="true">
-                <span className="dot" aria-hidden="true" />
-                停止 {clock(elapsed)}
-              </button>
-            ) : (
-              <button type="button" className="record" onClick={startRecording} aria-pressed="false">
+            {phase === 'idle' ? (
+              <button type="button" className="record" onClick={() => void startRecording()} aria-pressed="false">
                 <span className="dot" aria-hidden="true" />
                 録音する
               </button>
+            ) : (
+              <>
+                <button type="button" className="record is-on" onClick={() => void stopRecording()} aria-pressed="true">
+                  <span className="dot" aria-hidden="true" />
+                  停止 {formatClock(elapsed)}
+                </button>
+                {phase === 'paused' ? (
+                  <button type="button" onClick={resumeRecording}>
+                    続ける
+                  </button>
+                ) : (
+                  <button type="button" onClick={pauseRecording}>
+                    一時停止
+                  </button>
+                )}
+              </>
             )}
             <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>
               文字ファイルを開く
@@ -422,6 +412,7 @@ export function App() {
             <button
               type="button"
               className="ghost"
+              disabled={phase !== 'idle'}
               onClick={() => {
                 if (transcript.trim() && !window.confirm('入力中の原稿を、例文に入れ替えますか？')) return
                 setTitle(SAMPLE_TITLE)
@@ -445,11 +436,24 @@ export function App() {
               }}
             />
           </div>
+          {phase !== 'idle' ? (
+            <div className="meter" aria-hidden="true">
+              <span ref={meterRef} />
+            </div>
+          ) : null}
+          {recNote ? <p className="rec-status">{recNote}</p> : null}
+          {audioUrl ? (
+            <div className="take noprint">
+              <audio controls src={audioUrl} preload="metadata" />
+              <button type="button" onClick={() => void saveAudio()}>
+                音声を保存
+              </button>
+            </div>
+          ) : null}
           <p className="fine">
-            {speechSupported
-              ? '録音の文字起こしはブラウザの音声認識を使います。Chromeでは、話した言葉が認識機能へ送られることがあります。まとめの処理は端末の中だけです。'
-              : 'このブラウザは録音の文字起こしに未対応です。文字を貼り付けるか、Zoomなどの文字起こしファイルを開いてください。'}
+            録音した音声はこの端末に残ります。話しながらの文字起こしはブラウザの音声認識を使い、Chromeでは話した言葉が認識機能へ送られることがあります。音声ファイル自体はサーバーへ送りません。画面を閉じる前に「音声を保存」を押すと、パソコンへ送れます。
           </p>
+          {micBlock ? <p className="alert">{micBlock}</p> : null}
           {recError ? (
             <p className="alert" role="alert">
               {recError}
@@ -476,7 +480,7 @@ export function App() {
             <textarea
               id="transcript"
               value={transcript}
-              readOnly={recording}
+              readOnly={phase !== 'idle'}
               placeholder="ここに話した内容を貼り付けるか、録音を始めてください。"
               onChange={(event) => setTranscript(event.target.value)}
               onKeyDown={(event) => {
@@ -534,7 +538,7 @@ export function App() {
             </fieldset>
           ))}
           <button type="button" className="summarize" disabled={!canSummarize} onClick={runSummary}>
-            {recording ? '録音を止めてからまとめます' : 'この内容をまとめる'}
+            {phase === 'live' ? '録音を止めてからまとめます' : 'この内容をまとめる'}
           </button>
         </section>
 

@@ -178,6 +178,33 @@ button {
   color: var(--muted);
   font-family: var(--serif);
 }
+.rec-status {
+  margin: 8px 0 0;
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.meter {
+  margin-top: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #efe6d8;
+  overflow: hidden;
+}
+.meter span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg, #9d2c1c, #c4553a);
+}
+.take {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.take audio { width: 100%; }
+.take button { justify-self: start; }
 
 fieldset {
   margin: 0 0 12px;
