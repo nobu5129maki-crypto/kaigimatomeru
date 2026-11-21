@@ -141,6 +141,13 @@ export class MeetingRecorder {
     })
   }
 
+  clearText(): void {
+    this.base = ''
+    this.interimSpeech = ''
+    this.lastVoiceAt = 0
+    this.emitText('')
+  }
+
   async start(existing: string): Promise<string> {
     const blocked = recordingBlock()
     if (blocked) return blocked

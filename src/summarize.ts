@@ -32,6 +32,7 @@ export const LENGTHS: Record<
 }
 
 export const STYLE_GROUPS: { id: StyleGroup; label: string }[] = [
+  { id: 'live', label: '要点' },
   { id: 'shape', label: '形' },
   { id: 'voice', label: '文章の調子' },
   { id: 'record', label: '記録の型' },

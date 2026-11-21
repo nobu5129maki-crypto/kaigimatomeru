@@ -152,7 +152,6 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (style === 'point') return
     localStorage.setItem(PREF_KEY, JSON.stringify({ length, style }))
   }, [length, style])
 
@@ -300,34 +299,11 @@ export function App() {
     }, 30)
   }
 
-  function runPoint() {
-    const text = `${transcript}${interim ? `${transcript.trim() ? '\n' : ''}${interim}` : ''}`
-    if (charCount(text) === 0) return
-    const next = summarize({ text, title, date, attendees, length, style: 'point' })
-    setStyle('point')
-    setDoc(next)
-    setSigned(signatureOf({ transcript, title, date, attendees, length, style: 'point' }))
-    setNotice(next.note)
-    if (next.charCount > 0) {
-      const item: HistoryItem = {
-        id: `${Date.now()}`,
-        savedAt: new Date().toISOString(),
-        title: title.trim(),
-        date,
-        attendees: attendees.trim(),
-        transcript: text.trim(),
-        length,
-        style: 'point',
-      }
-      const prev = loadHistory().filter(
-        (entry) => entry.transcript !== item.transcript || entry.style !== item.style || entry.length !== item.length,
-      )
-      remember([item, ...prev])
-    }
-    window.setTimeout(() => {
-      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      resultRef.current?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-    }, 30)
+  function clearTranscript() {
+    recorderRef.current?.clearText()
+    setTranscript('')
+    setInterim('')
+    setNotice('文字起こしを消しました。次の録音を始められます。')
   }
 
   async function sendToPc() {
@@ -355,9 +331,9 @@ export function App() {
 
   const currentSignature = signatureOf({ transcript, title, date, attendees, length, style })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
-  const canSummarize = phase !== 'live' && charCount(transcript) > 0
-  const canPoint = charCount(`${transcript}${interim}`) > 0
   const shownTranscript = phase === 'live' ? liveTranscript(transcript, interim) : transcript
+  const canSummarize = phase !== 'live' && charCount(transcript) > 0
+  const canClear = phase !== 'live' && charCount(shownTranscript) > 0
 
   return (
     <>
@@ -497,10 +473,11 @@ export function App() {
                 if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canSummarize) runSummary()
               }}
             />
-            <button type="button" className="point" disabled={!canPoint} onClick={runPoint}>
-              要は、何が言いたい？
-            </button>
-            <p className="fine">相手の話が長いときに押すと、言いたいことだけを箇条書きにします。</p>
+            <div className="tools">
+              <button type="button" disabled={!canClear} onClick={clearTranscript}>
+                文字起こしを消す
+              </button>
+            </div>
           </div>
         </section>
 
@@ -603,7 +580,7 @@ export function App() {
           ) : (
             <div className="empty">
               <p>まとめると、ここに原稿が出ます。</p>
-              <p>見出し、箇条書き、速報のほか、長い話は「要は、何が言いたい？」で要点にできます。</p>
+              <p>まとめ方で「要は、何が言いたい？」を選ぶと、長い話を要点にできます。</p>
             </div>
           )}
           {history.length > 0 ? (
