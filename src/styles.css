@@ -317,9 +317,10 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .install {
   position: sticky;
   bottom: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px 16px;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
@@ -327,7 +328,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   color: #f6f1e7;
 }
 .install p, .install li { margin: 0; line-height: 1.6; }
-.install ol { margin: 0; padding-left: 1.2rem; }
+.install p { flex: 1 1 16rem; }
+.install ol { flex: 1 1 100%; margin: 0; padding-left: 1.2rem; }
+.install div { display: flex; gap: 8px; margin-left: auto; }
 .install .primary { background: #f6f1e7; color: var(--indigo); border-color: #f6f1e7; }
 .install button:not(.primary) { background: transparent; color: #f6f1e7; border-color: rgba(246, 241, 231, 0.4); }
 

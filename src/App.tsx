@@ -658,21 +658,35 @@ export function App() {
         </section>
       </main>
       <footer className="colophon noprint">
-        <p>会議の文章はこの端末だけに残ります。ホーム画面に追加すると、アプリのように開けます。</p>
+        <p>会議の文章はこの端末だけに残ります。</p>
       </footer>
       <InstallBar />
     </>
   )
 }
 
+function installSteps(): string[] {
+  const ua = navigator.userAgent
+  const chrome = /chrome|crios/i.test(ua) && !/edg\//i.test(ua)
+  if (/iphone|ipad|ipod/i.test(ua)) {
+    return ['画面下の共有ボタン（四角と上向き矢印）を押す', '「ホーム画面に追加」を選ぶ', '右上の「追加」を押す']
+  }
+  if (/android/i.test(ua)) {
+    return chrome
+      ? ['右上のメニュー（︙）を押す', '「ホーム画面に追加」または「アプリをインストール」を選ぶ', '追加を押す']
+      : ['このページをChromeで開く', '右上のメニュー（︙）を押す', '「ホーム画面に追加」または「アプリをインストール」を選ぶ']
+  }
+  return ['アドレスバー右端のインストールアイコンを押す', '無いときはブラウザのメニューを開く', '「会議まとめをインストール」を選ぶ']
+}
+
 function InstallBar() {
-  const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [prompt, setPrompt] = useState<BeforeInstallPromptEvent | null>(window.__installPrompt ?? null)
   const [hidden, setHidden] = useState(false)
-  const [iosHelp, setIosHelp] = useState(false)
+  const [help, setHelp] = useState(false)
+  const [note, setNote] = useState('')
   const standalone =
     window.matchMedia('(display-mode: standalone)').matches ||
     (window.navigator as Navigator & { standalone?: boolean }).standalone === true
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent)
 
   useEffect(() => {
     if (standalone || sessionStorage.getItem('kaigimatomeru-install-hide') === '1') {
@@ -680,11 +694,19 @@ function InstallBar() {
       return
     }
     const onPrompt = (event: Event) => {
-      event.preventDefault()
-      setPrompt(event as BeforeInstallPromptEvent)
+      if ('prompt' in event) {
+        event.preventDefault()
+        window.__installPrompt = event as BeforeInstallPromptEvent
+      }
+      setPrompt(window.__installPrompt ?? null)
     }
+    const onReady = () => setPrompt(window.__installPrompt ?? null)
     window.addEventListener('beforeinstallprompt', onPrompt)
-    return () => window.removeEventListener('beforeinstallprompt', onPrompt)
+    window.addEventListener('kaigi-install-ready', onReady)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt)
+      window.removeEventListener('kaigi-install-ready', onReady)
+    }
   }, [standalone])
 
   if (hidden || standalone) return null
@@ -694,47 +716,46 @@ function InstallBar() {
     setHidden(true)
   }
 
-  if (prompt) {
-    return (
-      <div className="install noprint">
-        <p>ホーム画面に追加すると、次からアプリとして開けます。</p>
-        <div>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => {
-              void prompt.prompt().then(() => {
-                setPrompt(null)
-                setHidden(true)
-              })
-            }}
-          >
-            追加する
-          </button>
-          <button type="button" onClick={dismiss}>
-            今はしない
-          </button>
-        </div>
-      </div>
-    )
+  const add = async () => {
+    const event = prompt ?? window.__installPrompt
+    if (!event) {
+      setHelp(true)
+      setNote('この画面からは直接追加できないため、次の手順で追加してください。')
+      return
+    }
+    try {
+      await event.prompt()
+      const choice = await event.userChoice
+      window.__installPrompt = null
+      setPrompt(null)
+      if (choice.outcome === 'accepted') {
+        setHidden(true)
+        return
+      }
+      setNote('追加をキャンセルしました。もう一度押すと、手順を表示します。')
+      setHelp(true)
+    } catch {
+      window.__installPrompt = null
+      setPrompt(null)
+      setHelp(true)
+      setNote('この画面からは直接追加できないため、次の手順で追加してください。')
+    }
   }
-
-  if (!ios) return null
 
   return (
     <div className="install noprint">
-      {iosHelp ? (
+      <p>ホーム画面に追加すると、アプリのように開けます。</p>
+      {note ? <p>{note}</p> : null}
+      {help ? (
         <ol>
-          <li>画面下の共有ボタンを押す</li>
-          <li>「ホーム画面に追加」を選ぶ</li>
-          <li>右上の追加を押す</li>
+          {installSteps().map((step) => (
+            <li key={step}>{step}</li>
+          ))}
         </ol>
-      ) : (
-        <p>iPhoneでは、共有からホーム画面に追加できます。</p>
-      )}
+      ) : null}
       <div>
-        <button type="button" className="primary" onClick={() => setIosHelp((value) => !value)}>
-          {iosHelp ? '閉じる' : '追加の手順'}
+        <button type="button" className="primary" onClick={() => void add()}>
+          ホーム画面に追加
         </button>
         <button type="button" onClick={dismiss}>
           今はしない
@@ -746,6 +767,13 @@ function InstallBar() {
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
+
+declare global {
+  interface Window {
+    __installPrompt: BeforeInstallPromptEvent | null
+  }
 }
 
 class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {

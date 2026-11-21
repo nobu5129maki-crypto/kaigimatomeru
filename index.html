@@ -17,6 +17,12 @@
       if (location.protocol === 'http:' && /(^|\.)xsrv\.jp$/.test(location.hostname)) {
         location.replace('https://' + location.host + location.pathname + location.search + location.hash)
       }
+      window.__installPrompt = null
+      window.addEventListener('beforeinstallprompt', function (event) {
+        event.preventDefault()
+        window.__installPrompt = event
+        window.dispatchEvent(new Event('kaigi-install-ready'))
+      })
     </script>
   </head>
   <body>
