@@ -87,16 +87,6 @@ export function pickRecordingFormat(): { mimeType: string; extension: string } {
   return { mimeType: '', extension: 'webm' }
 }
 
-function micError(error: unknown): string {
-  const name = error instanceof DOMException ? error.name : ''
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'マイクがブロックされています。ブラウザの設定で許可するか、文字を貼り付けてください。'
-  }
-  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'マイクが見つかりません。文字を貼り付けてください。'
-  if (name === 'NotReadableError') return 'マイクをほかのアプリが使っています。閉じてから、もう一度録音してください。'
-  return '録音を始められませんでした。もう一度押すか、文字を貼り付けてください。'
-}
-
 export class MeetingRecorder {
   private listener: Listener
   private generation = 0
@@ -113,6 +103,7 @@ export class MeetingRecorder {
   private speechFails = 0
   private interimSpeech = ''
   private restartTimer = 0
+  private localStarted = false
   private recorder: MediaRecorder | null = null
   private stream: MediaStream | null = null
   private audio: AudioContext | null = null
@@ -153,6 +144,9 @@ export class MeetingRecorder {
   async start(existing: string): Promise<string> {
     const blocked = recordingBlock()
     if (blocked) return blocked
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+      return 'このブラウザは話しながらの文字起こしができません。ChromeまたはEdgeで開いてください。'
+    }
     this.destroyQuiet()
     const generation = ++this.generation
     this.base = existing.trim() ? `${existing.replace(/\s+$/g, '')}\n` : ''
@@ -163,45 +157,22 @@ export class MeetingRecorder {
     this.speechHeard = false
     this.speechFails = 0
     this.interimSpeech = ''
+    this.localStarted = false
     this.phase = 'live'
     this.mark = performance.now()
-    this.primeAudio()
     this.wantSpeech = true
     this.openSpeech()
+    if (!this.speech) {
+      this.failStart()
+      return '文字起こしを始められませんでした。もう一度押してください。'
+    }
     this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
     this.emitPhase()
     this.emitText('')
-    this.listener.onNote(this.speech ? '話した言葉を、文字起こし欄へ順に出します。' : '文字起こしの準備をしています。')
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: { ideal: 1 },
-        },
-      })
-    } catch (error) {
-      if (this.generation === generation) this.failStart()
-      return micError(error)
-    }
-    if (this.generation !== generation) {
-      stream.getTracks().forEach((track) => track.stop())
-      return ''
-    }
-    this.stream = stream
-    this.openMeter(stream)
-    try {
-      this.openRecorder(stream)
-    } catch {
-      this.failStart()
-      return '音声ファイルを作れませんでした。もう一度押すか、文字を貼り付けてください。'
-    }
-    this.ear.open(stream, this.liveCtx)
+    this.listener.onNote('話した言葉を、文字起こし欄へ順に出します。')
     document.addEventListener('visibilitychange', this.onVisible)
     void this.claimWake()
-    this.pumpLevel()
+    if (this.generation !== generation) return ''
     return ''
   }
 
@@ -261,7 +232,7 @@ export class MeetingRecorder {
     this.emitText('')
     this.listener.onPhase('idle', Math.floor(this.ranMs / 1000))
     this.listener.onAudio(take)
-    this.listener.onNote(take ? '録音を止めました。音声ファイルを保存できます。' : '録音を止めました。')
+    this.listener.onNote(take ? '録音を止めました。音声ファイルを保存できます。' : '録音を止めました。文字は欄に残っています。')
   }
 
   destroy(): void {
@@ -324,8 +295,10 @@ export class MeetingRecorder {
       let finals = ''
       let interim = ''
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const piece = event.results[i][0]?.transcript ?? ''
-        if (event.results[i].isFinal) finals += piece
+        const result = event.results[i]
+        const alternative = result?.[0]
+        const piece = alternative?.transcript ?? ''
+        if (result?.isFinal) finals += piece
         else interim += piece
       }
       if (finals || interim) {
@@ -343,7 +316,15 @@ export class MeetingRecorder {
     recognition.onerror = (event) => {
       if (event.error === 'no-speech' || event.error === 'aborted') return
       this.speechFails += 1
-      if (this.speechFails >= 2) this.wantSpeech = false
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        this.wantSpeech = false
+        this.listener.onNote('マイクの音声認識がブロックされています。ブラウザの設定で許可してください。')
+        return
+      }
+      if (this.speechFails >= 2) {
+        this.wantSpeech = false
+        void this.beginLocal()
+      }
     }
     recognition.onend = () => {
       if (this.interimSpeech) {
@@ -362,6 +343,41 @@ export class MeetingRecorder {
       return
     }
     this.speech = recognition
+  }
+
+  private async beginLocal(): Promise<void> {
+    if (this.localStarted || this.phase !== 'live' || this.speechHeard) return
+    this.localStarted = true
+    this.listener.onNote('ブラウザの音声認識が届かないため、この端末で文字にしています。少し遅れて欄に出ます。')
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: { ideal: 1 },
+        },
+      })
+    } catch {
+      if (this.phase === 'live') this.listener.onNote('文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。')
+      return
+    }
+    if (this.phase !== 'live') {
+      stream.getTracks().forEach((track) => track.stop())
+      return
+    }
+    this.stream = stream
+    this.primeAudio()
+    this.openMeter(stream)
+    try {
+      this.openRecorder(stream)
+    } catch {
+      this.listener.onNote('文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。')
+      return
+    }
+    this.ear.open(stream, this.liveCtx)
+    this.pumpLevel()
   }
 
   private stopSpeech(): void {

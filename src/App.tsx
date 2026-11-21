@@ -460,7 +460,7 @@ export function App() {
             </div>
           ) : null}
           <p className="fine">
-            録音した音声も文字起こしも、この端末の中だけで処理します。初回の録音で、文字起こし用のモデルをこの端末へ受け取ります。会議の音声はサーバーへ送りません。画面を閉じる前に「音声を保存」を押すと、パソコンへ送れます。
+            特殊なアプリは要りません。ChromeまたはEdgeの録音ボタンで、話した言葉が欄に入ります。Firefoxでは話しながらの文字起こしはできません。
           </p>
           {micBlock ? <p className="alert">{micBlock}</p> : null}
           {recError ? (
