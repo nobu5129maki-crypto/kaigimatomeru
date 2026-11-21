@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendPiece, appendRecognized, audioFileName, formatClock, pickRecordingFormat } from './capture'
+import { appendPiece, appendRecognized, audioFileName, formatClock, liveTranscript, pickRecordingFormat } from './capture'
 
 describe('録音の文字', () => {
   it('聞き直しで重なった末尾を足さない', () => {
@@ -8,6 +8,12 @@ describe('録音の文字', () => {
 
   it('重なりがなければそのまま続ける', () => {
     expect(appendRecognized('原価は620円です。', '広告費が重いです。')).toBe('原価は620円です。広告費が重いです。')
+  })
+
+  it('認識中の言葉を文字起こし欄へ足す', () => {
+    expect(liveTranscript('価格は', '980円')).toBe('価格は980円')
+    expect(liveTranscript('価格は980円です', '980円です。粗利')).toBe('価格は980円です。粗利')
+    expect(liveTranscript('価格は980円です', '')).toBe('価格は980円です')
   })
 
   it('間が空いたら段落を分ける', () => {

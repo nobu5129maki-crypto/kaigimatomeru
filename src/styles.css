@@ -167,7 +167,7 @@ button {
 .alert { background: #fde8e2; color: #6d2418; }
 .notice { background: #eef4ea; color: #234232; }
 .editor { margin-top: 8px; }
-.editor.is-drag textarea { border-color: var(--seal); background: #fff7f4; }
+.editor.is-drag textarea, .editor.is-live textarea { border-color: var(--seal); background: #fff7f4; }
 .editor-label {
   display: flex;
   justify-content: space-between;

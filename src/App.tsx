@@ -1,5 +1,5 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
-import { audioFileName, formatClock, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
+import { audioFileName, formatClock, liveTranscript, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
 import { decodeTextFile, transcriptFromFile } from './importText'
 import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from './sample'
@@ -140,6 +140,7 @@ export function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const resultRef = useRef<HTMLElement>(null)
   const meterRef = useRef<HTMLSpanElement>(null)
+  const transcriptRef = useRef<HTMLTextAreaElement>(null)
   const recorderRef = useRef<MeetingRecorder | null>(null)
   const audioBlobRef = useRef<Blob | null>(null)
   const audioUrlRef = useRef('')
@@ -154,6 +155,13 @@ export function App() {
     if (style === 'point') return
     localStorage.setItem(PREF_KEY, JSON.stringify({ length, style }))
   }, [length, style])
+
+  useEffect(() => {
+    if (phase !== 'live') return
+    const area = transcriptRef.current
+    if (!area) return
+    area.scrollTop = area.scrollHeight
+  }, [phase, transcript, interim])
 
   useEffect(() => {
     const recorder = new MeetingRecorder({
@@ -349,6 +357,7 @@ export function App() {
   const dirty = Boolean(doc && signed && signed !== currentSignature)
   const canSummarize = phase !== 'live' && charCount(transcript) > 0
   const canPoint = charCount(`${transcript}${interim}`) > 0
+  const shownTranscript = phase === 'live' ? liveTranscript(transcript, interim) : transcript
 
   return (
     <>
@@ -460,7 +469,7 @@ export function App() {
             </p>
           ) : null}
           <div
-            className={dragging ? 'editor is-drag' : 'editor'}
+            className={dragging ? 'editor is-drag' : phase === 'live' ? 'editor is-live' : 'editor'}
             onDragOver={(event) => {
               event.preventDefault()
               setDragging(true)
@@ -475,11 +484,12 @@ export function App() {
           >
             <label className="editor-label" htmlFor="transcript">
               文字起こし
-              <span>{charCount(transcript).toLocaleString('ja-JP')}文字</span>
+              <span>{charCount(shownTranscript).toLocaleString('ja-JP')}文字</span>
             </label>
             <textarea
               id="transcript"
-              value={transcript}
+              ref={transcriptRef}
+              value={shownTranscript}
               readOnly={phase !== 'idle'}
               placeholder="ここに話した内容を貼り付けるか、録音を始めてください。"
               onChange={(event) => setTranscript(event.target.value)}
@@ -487,7 +497,6 @@ export function App() {
                 if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canSummarize) runSummary()
               }}
             />
-            {interim ? <p className="interim">認識中：{interim}</p> : null}
             <button type="button" className="point" disabled={!canPoint} onClick={runPoint}>
               要は、何が言いたい？
             </button>

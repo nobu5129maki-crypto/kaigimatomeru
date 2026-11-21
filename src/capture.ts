@@ -49,6 +49,12 @@ export function appendPiece(previous: string, piece: string, gapMs: number): str
   return previous + piece
 }
 
+export function liveTranscript(committed: string, interim: string): string {
+  const pending = interim.trim()
+  if (!pending) return committed
+  return appendRecognized(committed, pending)
+}
+
 export function appendRecognized(previous: string, incoming: string): string {
   const next = incoming.trim()
   if (!next) return previous
@@ -124,6 +130,7 @@ export class MeetingRecorder {
   private clockTimer = 0
   private recycleTimer = 0
   private restartTimer = 0
+  private heardSpeech = false
   private onVisible = () => {
     if (document.visibilityState === 'visible' && this.phase !== 'idle') void this.claimWake()
   }
@@ -143,6 +150,18 @@ export class MeetingRecorder {
     this.chunks = []
     this.ranMs = 0
     this.lastVoiceAt = 0
+    this.heardSpeech = false
+    this.phase = 'live'
+    this.mark = performance.now()
+    this.wantSpeech = this.openSpeech()
+    this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
+    this.emitPhase()
+    this.emitText('')
+    this.listener.onNote(
+      this.wantSpeech
+        ? '話した言葉を、文字起こし欄へ順に出します。'
+        : '音声を録音しています。このブラウザは話しながらの文字起こしができないため、音声ファイルに残します。',
+    )
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -154,6 +173,7 @@ export class MeetingRecorder {
         },
       })
     } catch (error) {
+      if (this.generation === generation) this.failStart()
       return micError(error)
     }
     if (this.generation !== generation) {
@@ -165,24 +185,30 @@ export class MeetingRecorder {
     try {
       this.openRecorder(stream)
     } catch {
-      this.releaseHardware()
+      this.failStart()
       return '音声ファイルを作れませんでした。もう一度押すか、文字を貼り付けてください。'
     }
-    this.phase = 'live'
-    this.mark = performance.now()
-    this.wantSpeech = this.openSpeech()
     document.addEventListener('visibilitychange', this.onVisible)
     void this.claimWake()
-    this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
     this.pumpLevel()
-    this.emitPhase()
-    this.emitText('')
-    this.listener.onNote(
-      this.wantSpeech
-        ? 'マイクは聞いています。無音でも録音は続きます。'
-        : '音声を録音しています。このブラウザは話しながらの文字起こしができないため、音声ファイルに残します。',
-    )
     return ''
+  }
+
+  private failStart(): void {
+    this.wantSpeech = false
+    this.phase = 'idle'
+    this.clearTimers()
+    try {
+      this.speech?.abort()
+    } catch {
+      /* 未開始 */
+    }
+    this.speech = null
+    this.recorder = null
+    this.releaseHardware()
+    document.removeEventListener('visibilitychange', this.onVisible)
+    this.listener.onLevel(0)
+    this.listener.onPhase('idle', 0)
   }
 
   pause(): void {
@@ -349,6 +375,7 @@ export class MeetingRecorder {
         else interim += piece
       }
       this.takeFinals(finals)
+      if (finals || interim) this.markHeard()
       this.emitText(interim)
     }
     recognition.onerror = (event) => {
@@ -415,6 +442,12 @@ export class MeetingRecorder {
     this.pretty = ''
     this.raw = ''
     this.emitText('')
+  }
+
+  private markHeard(): void {
+    if (this.heardSpeech) return
+    this.heardSpeech = true
+    this.listener.onNote('文字起こし欄に、話した順で出しています。')
   }
 
   private emitText(interim: string): void {
