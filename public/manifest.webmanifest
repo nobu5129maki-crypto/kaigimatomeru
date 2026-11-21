@@ -1,0 +1,40 @@
+{
+  "id": "./",
+  "name": "会議まとめ",
+  "short_name": "会議まとめ",
+  "description": "録音や文字起こしを、指定の長さと書き方でまとめ、パソコンで清書できるファイルにします。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "ja",
+  "dir": "ltr",
+  "background_color": "#f3efe6",
+  "theme_color": "#1b2838",
+  "icons": [
+    {
+      "src": "./icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,229 @@
+import { describe, expect, it } from 'vitest'
+import { docxBuffer, fileStem, markdownDocument } from './files'
+import { parseSrt, parseVtt, transcriptFromFile } from './importText'
+import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from './sample'
+import {
+  LENGTHS,
+  STYLES,
+  charCount,
+  documentText,
+  formatJapaneseDate,
+  summarize,
+  trimToCount,
+  type LengthId,
+  type StyleId,
+} from './summarize'
+
+const lengths = Object.keys(LENGTHS) as LengthId[]
+const styles = Object.keys(STYLES) as StyleId[]
+const headings = new Set([
+  '',
+  '要点',
+  '決まったこと',
+  '論点',
+  '宿題',
+  'このあと',
+  '確認されたこと',
+  '決定事項',
+  '保留・懸念',
+  '次回',
+  '確認事項',
+  '会議のまとめ',
+])
+
+function digitsOf(text: string): string[] {
+  return [...text.matchAll(/\d[\d,]*/g)].map((match) => match[0].replace(/,/g, ''))
+}
+
+describe('文字数', () => {
+  it('空白を除いて数える', () => {
+    expect(charCount('あ い　う')).toBe(3)
+    expect(charCount('980円')).toBe(4)
+  })
+
+  it('長い文を区切りで短くする', () => {
+    const cut = trimToCount('初回価格は980円、3月1日から1,080円へ見直します。', 12)
+    expect(charCount(cut)).toBeLessThanOrEqual(12)
+    expect(cut.endsWith('…')).toBe(true)
+  })
+})
+
+describe('日付', () => {
+  it('ISOを日本語にする', () => {
+    expect(formatJapaneseDate('2026-11-21')).toBe('2026年11月21日')
+  })
+})
+
+describe('ファイルの読み込み', () => {
+  it('VTTの時刻を除いて同じ字幕を重ねない', () => {
+    const text = parseVtt(`WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+価格は980円です。
+
+00:00:03.000 --> 00:00:05.000
+価格は980円です。
+
+00:00:05.000 --> 00:00:08.000
+次回は12月2日です。
+`)
+    expect(text).toBe('価格は980円です。\n次回は12月2日です。')
+  })
+
+  it('SRTの番号と時刻を除く', () => {
+    const text = parseSrt(`1
+00:00:01,000 --> 00:00:03,000
+決定は980円です。
+
+2
+00:00:03,000 --> 00:00:05,000
+色は保留です。
+`)
+    expect(text).toContain('決定は980円です。')
+    expect(text).not.toContain('-->')
+  })
+
+  it('拡張子でVTTを選ぶ', () => {
+    const text = transcriptFromFile('meeting.vtt', 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nこんにちは。\n')
+    expect(text).toBe('こんにちは。')
+  })
+})
+
+describe('まとめ', () => {
+  it('空欄は原稿がないと伝える', () => {
+    const doc = summarize({
+      text: '   \n',
+      title: '',
+      date: SAMPLE_DATE,
+      attendees: '',
+      length: 'c200',
+      style: 'memo',
+    })
+    expect(doc.charCount).toBe(0)
+    expect(doc.note).toContain('文章がありません')
+  })
+
+  it('短い原稿に話していないことを足さない', () => {
+    const doc = summarize({
+      text: '佐藤：明日の会場は本社です。',
+      title: '短い会議',
+      date: SAMPLE_DATE,
+      attendees: '佐藤',
+      length: 'a4',
+      style: 'news',
+    })
+    expect(doc.charCount).toBeLessThan(doc.min)
+    expect(doc.note).toContain('足していません')
+    expect(doc.plain).toContain('本社')
+    expect(doc.plain).not.toContain('980')
+  })
+
+  it('例文は長さの上限を守り、原稿にあることだけを書く', () => {
+    for (const length of lengths) {
+      for (const style of styles) {
+        const doc = summarize({
+          text: SAMPLE_TRANSCRIPT,
+          title: SAMPLE_TITLE,
+          date: SAMPLE_DATE,
+          attendees: SAMPLE_ATTENDEES,
+          length,
+          style,
+        })
+        expect(doc.charCount, `${length}/${style}\n${doc.plain}`).toBeLessThanOrEqual(doc.max)
+        expect(doc.charCount, `${length}/${style}`).toBeGreaterThan(0)
+        if (doc.charCount < doc.min) {
+          expect(doc.note, `${length}/${style} ${doc.charCount}`).toContain('短い')
+        }
+        for (const n of digitsOf(doc.plain)) {
+          expect(SAMPLE_TRANSCRIPT.replace(/,/g, ''), `${length}/${style} number ${n}`).toContain(n)
+        }
+        if (doc.headline && !headings.has(doc.headline) && doc.headline !== SAMPLE_TITLE) {
+          expect(SAMPLE_TRANSCRIPT.includes(doc.headline.replace(/…$/g, '')), doc.headline).toBe(true)
+        }
+        for (const block of doc.blocks) {
+          expect(headings.has(block.heading) || SAMPLE_TRANSCRIPT.includes(block.heading)).toBe(true)
+          for (const line of block.lines) {
+            if (line === '会議の要点を共有します。' || line === '以上です。') continue
+            const core = line.replace(/…$/g, '')
+            expect(SAMPLE_TRANSCRIPT.includes(core), `${style} ${line}`).toBe(true)
+          }
+        }
+      }
+    }
+  })
+
+  it('200文字の新聞は見出しがあり、980円が残る', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c200',
+      style: 'news',
+    })
+    expect(doc.headline.length).toBeGreaterThan(0)
+    expect(doc.plain).toContain('980')
+    expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
+  })
+
+  it('政治記者風は決まったことと論点に分ける', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'politics',
+    })
+    expect(doc.plain).toContain('決まったこと')
+    expect(doc.plain).toMatch(/論点|保留/)
+  })
+
+  it('議事録は決定事項を出す', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'minutes',
+    })
+    expect(doc.plain).toContain('決定事項')
+  })
+
+  it('清書用の本文に日付と出席者を添える', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c200',
+      style: 'mail',
+    })
+    const full = documentText(doc)
+    expect(full).toContain(SAMPLE_TITLE)
+    expect(full).toContain('2026年11月21日')
+    expect(full).toContain('出席：佐藤、田中、鈴木、高橋')
+    expect(full).toContain('社内連絡')
+    expect(markdownDocument(doc)).toContain(`# ${SAMPLE_TITLE}`)
+    expect(fileStem(doc)).not.toMatch(/[\\/:*?"<>|]/)
+  })
+})
+
+describe('Word', () => {
+  it('Wordで開けるファイルになる', async () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c200',
+      style: 'news',
+    })
+    const buffer = await docxBuffer(doc)
+    expect(buffer[0]).toBe(0x50)
+    expect(buffer[1]).toBe(0x4b)
+    const xml = new TextDecoder().decode(buffer)
+    expect(xml.includes(SAMPLE_TITLE) || buffer.byteLength > 1000).toBe(true)
+  })
+})
