@@ -94,6 +94,24 @@ h2 {
   gap: 10px;
 }
 .meta .wide { grid-column: 1 / -1; }
+.field { display: grid; gap: 6px; align-content: start; }
+.picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.picks button {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.picks button.crew { max-width: 100%; }
+.picks button.is-on {
+  background: var(--indigo);
+  color: #f6f1e7;
+  border-color: var(--indigo);
+}
 label, legend {
   display: grid;
   gap: 6px;

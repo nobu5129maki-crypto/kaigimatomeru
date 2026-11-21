@@ -2,7 +2,16 @@ import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
 import { audioFileName, formatClock, liveTranscript, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
 import { decodeTextFile, transcriptFromFile } from './importText'
-import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from './sample'
+import {
+  combineRoster,
+  emptyRoster,
+  joinAttendees,
+  rememberRoster,
+  rosterFromHistory,
+  splitAttendees,
+  toggleAttendee,
+  type Roster,
+} from './roster'
 import {
   LENGTHS,
   STYLE_GROUPS,
@@ -17,6 +26,7 @@ import {
 
 const HISTORY_KEY = 'kaigimatomeru.history.v1'
 const PREF_KEY = 'kaigimatomeru.pref.v1'
+const ROSTER_KEY = 'kaigimatomeru.roster.v1'
 
 type HistoryItem = {
   id: string
@@ -68,6 +78,24 @@ function loadHistory(): HistoryItem[] {
     return parsed.filter(isHistory).slice(0, 12)
   } catch {
     return []
+  }
+}
+
+function isRoster(value: unknown): value is Roster {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<Roster>
+  return Array.isArray(item.titles) && Array.isArray(item.groups) && Array.isArray(item.names) &&
+    item.titles.every((entry) => typeof entry === 'string') &&
+    item.groups.every((entry) => typeof entry === 'string') &&
+    item.names.every((entry) => typeof entry === 'string')
+}
+
+function loadRoster(): Roster {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ROSTER_KEY) ?? '{}') as unknown
+    return isRoster(parsed) ? parsed : emptyRoster()
+  } catch {
+    return emptyRoster()
   }
 }
 
@@ -136,6 +164,7 @@ export function App() {
   const [signed, setSigned] = useState('')
   const [notice, setNotice] = useState('')
   const [history, setHistory] = useState<HistoryItem[]>([])
+  const [roster, setRoster] = useState<Roster>(emptyRoster)
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const resultRef = useRef<HTMLElement>(null)
@@ -148,8 +177,22 @@ export function App() {
   const micBlock = recordingBlock()
 
   useEffect(() => {
-    setHistory(loadHistory())
+    const saved = loadHistory()
+    setHistory(saved)
+    setRoster(combineRoster(loadRoster(), rosterFromHistory(saved)))
   }, [])
+
+  function keepNames(nextTitle = title, nextAttendees = attendees) {
+    setRoster((current) => {
+      const next = rememberRoster(current, { title: nextTitle, attendees: nextAttendees })
+      try {
+        localStorage.setItem(ROSTER_KEY, JSON.stringify(next))
+      } catch {
+        /* 記憶できなくても、入力自体はそのまま使える */
+      }
+      return next
+    })
+  }
 
   useEffect(() => {
     localStorage.setItem(PREF_KEY, JSON.stringify({ length, style }))
@@ -211,6 +254,7 @@ export function App() {
   async function startRecording() {
     setRecError('')
     setNotice('')
+    keepNames()
     const replacing = Boolean(audioBlobRef.current)
     const error = (await recorderRef.current?.start(transcript)) ?? ''
     if (error) {
@@ -275,6 +319,7 @@ export function App() {
 
   function runSummary() {
     if (phase === 'live') return
+    keepNames()
     const next = summarize({ text: transcript, title, date, attendees, length, style })
     setDoc(next)
     setSigned(signatureOf({ transcript, title, date, attendees, length, style }))
@@ -350,23 +395,101 @@ export function App() {
         <section className="card source" aria-labelledby="source-heading">
           <h2 id="source-heading">原稿</h2>
           <div className="meta">
-            <label>
-              会議名
-              <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="例：発売会議" />
-            </label>
+            <div className="field">
+              <label htmlFor="meeting-title">会議名</label>
+              <input
+                id="meeting-title"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={(event) => keepNames(event.currentTarget.value, attendees)}
+                maxLength={80}
+                placeholder="例：発売会議"
+                list="meeting-titles"
+                autoComplete="organization"
+              />
+              <datalist id="meeting-titles">
+                {roster.titles.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              {roster.titles.length > 0 ? (
+                <div className="picks" role="group" aria-label="前に使った会議名">
+                  {roster.titles.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={title.trim() === name ? 'is-on' : ''}
+                      onClick={() => {
+                        setTitle(name)
+                        keepNames(name, attendees)
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <label>
               日付
               <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
-            <label className="wide">
-              出席者
+            <div className="field wide">
+              <label htmlFor="meeting-people">出席者</label>
               <input
+                id="meeting-people"
                 value={attendees}
                 onChange={(event) => setAttendees(event.target.value)}
+                onBlur={(event) => keepNames(title, event.currentTarget.value)}
                 maxLength={120}
                 placeholder="例：佐藤、田中"
+                list="meeting-people-list"
+                autoComplete="off"
               />
-            </label>
+              <datalist id="meeting-people-list">
+                {roster.groups.map((group) => (
+                  <option key={group} value={group} />
+                ))}
+                {roster.names.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+              {roster.groups.length > 0 || roster.names.length > 0 ? (
+                <div className="picks" role="group" aria-label="前に使った出席者">
+                  {roster.groups.map((group) => (
+                    <button
+                      key={group}
+                      type="button"
+                      className={joinAttendees(splitAttendees(attendees)) === group ? 'is-on crew' : 'crew'}
+                      onClick={() => {
+                        setAttendees(group)
+                        keepNames(title, group)
+                      }}
+                    >
+                      {group}
+                    </button>
+                  ))}
+                  {roster.names.map((name) => {
+                    const on = splitAttendees(attendees).includes(name)
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        aria-pressed={on}
+                        className={on ? 'is-on' : ''}
+                        onClick={() => {
+                          const next = toggleAttendee(attendees, name)
+                          setAttendees(next)
+                          keepNames(title, next)
+                        }}
+                      >
+                        {name}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="tools">
             {phase === 'idle' ? (
@@ -393,21 +516,6 @@ export function App() {
             )}
             <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>
               文字ファイルを開く
-            </button>
-            <button
-              type="button"
-              className="ghost"
-              disabled={phase !== 'idle'}
-              onClick={() => {
-                if (transcript.trim() && !window.confirm('入力中の原稿を、例文に入れ替えますか？')) return
-                setTitle(SAMPLE_TITLE)
-                setDate(SAMPLE_DATE)
-                setAttendees(SAMPLE_ATTENDEES)
-                setTranscript(SAMPLE_TRANSCRIPT)
-                setNotice('例文を入れました。長さと書き方を選んで、まとめてください。')
-              }}
-            >
-              例文を入れる
             </button>
             <input
               ref={fileRef}
