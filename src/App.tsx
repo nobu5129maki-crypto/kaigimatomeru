@@ -163,6 +163,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    if (style === 'point') return
     localStorage.setItem(PREF_KEY, JSON.stringify({ length, style }))
   }, [length, style])
 
@@ -312,6 +313,36 @@ export function App() {
     }, 30)
   }
 
+  function runPoint() {
+    const text = `${transcript}${interim ? `${transcript.trim() ? '\n' : ''}${interim}` : ''}`
+    if (charCount(text) === 0) return
+    const next = summarize({ text, title, date, attendees, length, style: 'point' })
+    setStyle('point')
+    setDoc(next)
+    setSigned(signatureOf({ transcript, title, date, attendees, length, style: 'point' }))
+    setNotice(next.note)
+    if (next.charCount > 0) {
+      const item: HistoryItem = {
+        id: `${Date.now()}`,
+        savedAt: new Date().toISOString(),
+        title: title.trim(),
+        date,
+        attendees: attendees.trim(),
+        transcript: text.trim(),
+        length,
+        style: 'point',
+      }
+      const prev = loadHistory().filter(
+        (entry) => entry.transcript !== item.transcript || entry.style !== item.style || entry.length !== item.length,
+      )
+      remember([item, ...prev])
+    }
+    window.setTimeout(() => {
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      resultRef.current?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+    }, 30)
+  }
+
   async function sendToPc() {
     if (!doc || doc.charCount === 0) return
     setNotice('Wordファイルを用意しています。')
@@ -338,6 +369,7 @@ export function App() {
   const currentSignature = signatureOf({ transcript, title, date, attendees, length, style })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
   const canSummarize = !recording && charCount(transcript) > 0
+  const canPoint = charCount(`${transcript}${interim}`) > 0
 
   return (
     <>
@@ -452,6 +484,10 @@ export function App() {
               }}
             />
             {interim ? <p className="interim">認識中：{interim}</p> : null}
+            <button type="button" className="point" disabled={!canPoint} onClick={runPoint}>
+              要は、何が言いたい？
+            </button>
+            <p className="fine">相手の話が長いときに押すと、言いたいことだけを箇条書きにします。</p>
           </div>
         </section>
 
@@ -554,7 +590,7 @@ export function App() {
           ) : (
             <div className="empty">
               <p>まとめると、ここに原稿が出ます。</p>
-              <p>見出し、箇条書き、速報、報告書、新聞記事から選べます。</p>
+              <p>見出し、箇条書き、速報のほか、長い話は「要は、何が言いたい？」で要点にできます。</p>
             </div>
           )}
           {history.length > 0 ? (
@@ -588,7 +624,7 @@ export function App() {
                     >
                       <strong>{item.title || '無題の会議'}</strong>
                       <span>
-                        {item.date}　{STYLES[item.style].label}／{LENGTHS[item.length].label}
+                        {item.date}　{item.style === 'point' ? STYLES[item.style].label : `${STYLES[item.style].label}／${LENGTHS[item.length].label}`}
                       </span>
                     </button>
                     <button

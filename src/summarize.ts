@@ -15,7 +15,8 @@ export type StyleId =
   | 'politics'
   | 'minutes'
   | 'mail'
-export type StyleGroup = 'shape' | 'voice' | 'record'
+  | 'point'
+export type StyleGroup = 'shape' | 'voice' | 'record' | 'live'
 
 export const LENGTHS: Record<
   LengthId,
@@ -50,6 +51,7 @@ export const STYLES: Record<StyleId, { label: string; hint: string; group: Style
   memo: { label: '読みやすいメモ', hint: '話した順に、要点だけを残します', group: 'voice' },
   minutes: { label: '議事録', hint: '決定・宿題・確認・次回に分けます', group: 'record' },
   mail: { label: '社内連絡', hint: '件名つきで、そのまま送れる形です', group: 'record' },
+  point: { label: '要は、何が言いたい？', hint: '長い話を、言いたいことの箇条書きにします', group: 'live' },
 }
 
 export type SummarizeInput = {
@@ -113,6 +115,7 @@ export function formatJapaneseDate(iso: string): string {
 }
 
 export function summarize(input: SummarizeInput): SummaryResult {
+  if (input.style === 'point') return summarizePoint(input)
   const length = LENGTHS[input.length]
   const style = STYLES[input.style]
   const title = input.title.trim()
@@ -209,6 +212,122 @@ function hasWords(text: string): boolean {
   return /[\p{L}\p{N}]/u.test(text)
 }
 
+type TalkTurn = { speaker: string; body: string; chars: number }
+
+function summarizePoint(input: SummarizeInput): SummaryResult {
+  const title = input.title.trim()
+  const attendees = input.attendees.trim()
+  const dateline = formatJapaneseDate(input.date)
+  const turn = longAnswer(input.text)
+  const spoken = scoreUnits(pointSentences(turn.body), 'point')
+  const kept = spoken.filter((unit) => !isFiller(unit.text))
+  const units = kept.length > 0 ? kept : spoken
+  const base = {
+    title: title || (turn.speaker ? `${turn.speaker}の話` : 'インタビュー'),
+    dateline,
+    attendees,
+    target: 160,
+    min: 1,
+    max: 260,
+    style: 'point' as const,
+    length: input.length,
+    styleLabel: STYLES.point.label,
+    lengthLabel: '要点だけ',
+  }
+  if (units.length === 0) {
+    return {
+      ...base,
+      headline: '',
+      blocks: [],
+      plain: '',
+      charCount: 0,
+      note: 'まとめられる文章がありません。録音するか、文字を貼り付けてください。',
+    }
+  }
+  const fitted = fitUnits(units, 'point', base.title, base.max, base.min, base.target)
+  const whose = turn.speaker ? `${turn.speaker}の話を、` : ''
+  return {
+    ...base,
+    headline: fitted.headline,
+    blocks: fitted.blocks,
+    plain: fitted.plain,
+    charCount: fitted.charCount,
+    note: `${whose}言いたいことだけを箇条書きにしました。`,
+    title: title || base.title,
+  }
+}
+
+function longAnswer(text: string): TalkTurn {
+  const turns = speakerTurns(text)
+  if (turns.length === 0) return { speaker: '', body: '', chars: 0 }
+  const answers = turns.filter((turn) => !isShortQuestion(turn.body))
+  const pool = answers.length > 0 ? answers : turns
+  for (let i = pool.length - 1; i >= 0; i -= 1) {
+    if (pool[i].chars >= 70) return pool[i]
+  }
+  return pool.reduce((best, turn) => (turn.chars > best.chars ? turn : best))
+}
+
+function speakerTurns(text: string): TalkTurn[] {
+  const cleaned = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim()
+  if (!cleaned) return []
+  const turns: TalkTurn[] = []
+  for (const rawLine of cleaned.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || !hasWords(line)) continue
+    const match = /^([^：:\n]{1,16})[：:]/.exec(line)
+    const speaker = match?.[1] ?? ''
+    const last = turns[turns.length - 1]
+    if (last && speaker && last.speaker === speaker) {
+      last.body = `${last.body}\n${line}`
+    } else if (last && !speaker) {
+      last.body = `${last.body}\n${line}`
+    } else {
+      turns.push({ speaker, body: line, chars: 0 })
+    }
+  }
+  for (const turn of turns) turn.chars = charCount(turn.body)
+  return turns
+}
+
+function isShortQuestion(body: string): boolean {
+  const spoken = spokenBody(body)
+  return charCount(spoken) <= 40 && /[？?]$/.test(spoken)
+}
+
+function spokenBody(text: string): string {
+  return text.replace(/^[^：:\n]{1,16}[：:]/, '').trim()
+}
+
+function pointSentences(body: string): string[] {
+  const spoken = body
+    .split('\n')
+    .map((line) => spokenBody(line).trim())
+    .filter((line) => hasWords(line))
+    .join('')
+  return spoken
+    .split(/(?<=[。！？!?])/)
+    .map((piece) => piece.trim())
+    .filter((piece) => hasWords(piece))
+}
+
+function isFiller(text: string): boolean {
+  const body = spokenBody(text).replace(/[。、！？!?\s　]/g, '')
+  return /^(えーと|あのー|あの|はい|うん|ええ|そうですね)+$/.test(body)
+}
+
+function pointBonus(text: string, index: number, total: number): number {
+  const body = spokenBody(text)
+  let bonus = 0
+  if (/要するに|つまり|結局|結論|言いたい|ポイント|一番|本音/.test(body)) bonus += 8
+  if (/と思います|と考え|すべき|したい|必要|からです|だから|なんです|わけです/.test(body)) bonus += 3
+  if (/\d/.test(body)) bonus += 2
+  if (/[？?]$/.test(body)) bonus -= 8
+  if (index === total - 1) bonus += 2
+  if (/^(えーと|あの|はい|うん|そうですね)[。、！？!?]*$/.test(body)) bonus -= 8
+  return bonus
+}
+
 function classify(text: string): Kind {
   const body = text.replace(/^[^：:\n]{1,16}[：:]/, '')
   if (/決定は|決定事項|に決定|を決定|で決定|承認|了承|合意|可決|賛成|進める|見直す|で売り|優先します/.test(body)) return 'decision'
@@ -224,6 +343,7 @@ function scoreUnits(texts: string[], style: StyleId): Unit[] {
     let score = KIND_WEIGHT[kind]
     if (style === 'todo' && (kind === 'action' || kind === 'schedule')) score += 5
     if (style === 'contrast' && (kind === 'decision' || kind === 'issue')) score += 3
+    if (style === 'point') score += pointBonus(text, index, texts.length)
     if (/\d/.test(text)) score += 1
     if (/決定は|決定事項|保留/.test(text)) score += 2
     if (index >= texts.length - 2 && style !== 'timeline') score += 1
@@ -255,6 +375,7 @@ function fitUnits(
     const trial = [...chosen, unit]
     if (over(trial)) continue
     chosen.push(unit)
+    if (style === 'point' && chosen.length >= 6) break
     if (renderedCount(style, chosen, title) >= target) break
   }
 
@@ -338,6 +459,7 @@ function render(
   if (style === 'politics') return finish(renderPolitics(units))
   if (style === 'minutes') return finish(renderMinutes(units))
   if (style === 'mail') return finish(renderMail(units, title))
+  if (style === 'point') return finish(renderPoint(units))
   return finish(renderMemo(units))
 }
 
@@ -365,6 +487,15 @@ function renderTitled(units: Unit[]): { headline: string; blocks: SummaryBlock[]
   return {
     headline: headlineOf(units),
     blocks: ordered.length ? [{ heading: '', lines: linesOf(ordered) }] : [],
+  }
+}
+
+function renderPoint(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
+  const ordered = [...units].sort((a, b) => a.index - b.index)
+  const lines = ordered.map((unit) => spokenBody(unit.text)).filter((line) => line.length > 0)
+  return {
+    headline: headlineOf(units),
+    blocks: lines.length ? [{ heading: '言いたいこと', lines, list: true }] : [],
   }
 }
 

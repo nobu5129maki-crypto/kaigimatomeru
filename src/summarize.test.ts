@@ -46,6 +46,7 @@ const headings = new Set([
   'どこで',
   'どのように',
   '誰が',
+  '言いたいこと',
 ])
 
 function digitsOf(text: string): string[] {
@@ -222,6 +223,33 @@ describe('まとめ', () => {
     })
     expect(doc.blocks.every((block) => block.list)).toBe(true)
     expect(doc.plain).toContain('980')
+  })
+
+  it('要は何が言いたいは、長い答えだけを箇条書きにする', () => {
+    const interview = `私：今日の値段、どう思いますか？
+田中：えーと、そうですね。原価は1本620円です。980円だと粗利が薄いです。広告費を乗せると赤字に近づきます。要するに、初回は980円で認知を取り、3月1日から1,080円に見直すべきだと思います。色は青と緑で迷っていますが、今日は決めなくていいです。
+私：色は？`
+    const doc = summarize({
+      text: interview,
+      title: '価格のインタビュー',
+      date: SAMPLE_DATE,
+      attendees: '私、田中',
+      length: 'c200',
+      style: 'point',
+    })
+    expect(doc.blocks.some((block) => block.list && block.heading === '言いたいこと')).toBe(true)
+    expect(doc.blocks.reduce((sum, block) => sum + block.lines.length, 0)).toBeGreaterThan(1)
+    expect(doc.plain).toContain('980')
+    expect(doc.plain).toContain('要するに')
+    expect(doc.plain).not.toContain('どう思いますか')
+    expect(doc.plain).not.toContain('色は？')
+    expect(doc.plain).not.toContain('えーと')
+    expect(doc.note).toContain('田中')
+    for (const block of doc.blocks) {
+      for (const line of block.lines) {
+        expect(interview.includes(line), line).toBe(true)
+      }
+    }
   })
 
   it('議事録は決定事項を出す', () => {
