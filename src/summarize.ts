@@ -1,4 +1,4 @@
-export type LengthId = 'c100' | 'c200' | 'c400' | 'c800' | 'a4'
+export type LengthId = 'c100' | 'c200' | 'c400' | 'c800' | 'a4' | 'c2000' | 'c4000'
 export type StyleId =
   | 'titled'
   | 'bullets'
@@ -25,8 +25,10 @@ export const LENGTHS: Record<
   c100: { label: '100文字程度', hint: '一声で伝わる長さ', target: 100, min: 70, max: 140 },
   c200: { label: '200文字程度', hint: '短い連絡に足りる長さ', target: 200, min: 150, max: 260 },
   c400: { label: '400文字程度', hint: '段落が2つほどの長さ', target: 400, min: 300, max: 500 },
-  c800: { label: '800文字程度', hint: '経緯が残る長さ', target: 800, min: 620, max: 980 },
+  c800: { label: '800文字程度', hint: '30分までの経緯が残る長さ', target: 800, min: 620, max: 980 },
   a4: { label: 'A4用紙一枚', hint: '印刷すると1枚に収まる長さ', target: 1050, min: 820, max: 1200 },
+  c2000: { label: '2,000文字程度', hint: '1時間を、読んで渡せる長さ', target: 2000, min: 1600, max: 2400 },
+  c4000: { label: '4,000文字程度', hint: '論点まで残す詳しい記録', target: 4000, min: 3200, max: 4800 },
 }
 
 export const STYLE_GROUPS: { id: StyleGroup; label: string }[] = [
@@ -205,7 +207,7 @@ function splitUnits(text: string): string[] {
       units.push(piece)
     }
   }
-  return units.slice(0, 400)
+  return units.slice(0, 800)
 }
 
 function hasWords(text: string): boolean {

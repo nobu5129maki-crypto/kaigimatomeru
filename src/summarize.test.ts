@@ -121,6 +121,38 @@ describe('まとめ', () => {
     expect(doc.note).toContain('文章がありません')
   })
 
+  it('1時間ぶんの長さは、原稿が長ければ指定の範囲に収まる', () => {
+    const lines = Array.from({ length: 160 }, (_, index) => {
+      const n = index + 1
+      return `佐藤：第${n}号の確認は、在庫${n * 10}本と期限${n}日です。`
+    })
+    const text = lines.join('\n')
+    const doc = summarize({
+      text,
+      title: '長い会議',
+      date: SAMPLE_DATE,
+      attendees: '佐藤',
+      length: 'c2000',
+      style: 'memo',
+    })
+    expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+    expect(doc.plain).toContain('第160号')
+    for (const n of digitsOf(doc.plain)) {
+      expect(text.replace(/,/g, '')).toContain(n)
+    }
+    const detailed = summarize({
+      text,
+      title: '長い会議',
+      date: SAMPLE_DATE,
+      attendees: '佐藤',
+      length: 'c4000',
+      style: 'minutes',
+    })
+    expect(detailed.charCount).toBeGreaterThan(doc.charCount)
+    expect(detailed.charCount).toBeLessThanOrEqual(detailed.max)
+  })
+
   it('短い原稿に話していないことを足さない', () => {
     const doc = summarize({
       text: '佐藤：明日の会場は本社です。',
