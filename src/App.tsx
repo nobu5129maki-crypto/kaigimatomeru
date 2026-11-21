@@ -4,6 +4,7 @@ import { decodeTextFile, transcriptFromFile } from './importText'
 import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from './sample'
 import {
   LENGTHS,
+  STYLE_GROUPS,
   STYLES,
   charCount,
   documentText,
@@ -474,24 +475,28 @@ export function App() {
               ))}
             </div>
           </fieldset>
-          <fieldset>
-            <legend>書き方</legend>
-            <div className="choices styles" role="radiogroup" aria-label="書き方">
-              {(Object.keys(STYLES) as StyleId[]).map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="radio"
-                  aria-checked={style === id}
-                  className={style === id ? 'choice is-on' : 'choice'}
-                  onClick={() => setStyle(id)}
-                >
-                  <strong>{STYLES[id].label}</strong>
-                  <span>{STYLES[id].hint}</span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          {STYLE_GROUPS.map((group) => (
+            <fieldset key={group.id}>
+              <legend>{group.label}</legend>
+              <div className="choices styles" role="radiogroup" aria-label={group.label}>
+                {(Object.keys(STYLES) as StyleId[])
+                  .filter((id) => STYLES[id].group === group.id)
+                  .map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="radio"
+                      aria-checked={style === id}
+                      className={style === id ? 'choice is-on' : 'choice'}
+                      onClick={() => setStyle(id)}
+                    >
+                      <strong>{STYLES[id].label}</strong>
+                      <span>{STYLES[id].hint}</span>
+                    </button>
+                  ))}
+              </div>
+            </fieldset>
+          ))}
           <button type="button" className="summarize" disabled={!canSummarize} onClick={runSummary}>
             {recording ? '録音を止めてからまとめます' : 'この内容をまとめる'}
           </button>
@@ -512,9 +517,15 @@ export function App() {
                 {doc.blocks.map((block, index) => (
                   <section key={`${block.heading}-${index}`}>
                     {block.heading ? <h4>{block.heading}</h4> : null}
-                    {block.lines.map((line, lineIndex) => (
-                      <p key={`${index}-${lineIndex}`}>{line}</p>
-                    ))}
+                    {block.list ? (
+                      <ul>
+                        {block.lines.map((line, lineIndex) => (
+                          <li key={`${index}-${lineIndex}`}>{line}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      block.lines.map((line, lineIndex) => <p key={`${index}-${lineIndex}`}>{line}</p>)
+                    )}
                   </section>
                 ))}
                 <p className="count noprint">本文 {doc.charCount.toLocaleString('ja-JP')}文字（目標 {doc.target}文字）</p>
@@ -543,7 +554,7 @@ export function App() {
           ) : (
             <div className="empty">
               <p>まとめると、ここに原稿が出ます。</p>
-              <p>100文字、新聞記事、A4一枚、政治記者風から選べます。</p>
+              <p>見出し、箇条書き、速報、報告書、新聞記事から選べます。</p>
             </div>
           )}
           {history.length > 0 ? (

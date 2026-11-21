@@ -241,7 +241,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-bottom: 1px solid var(--line);
   padding-bottom: 4px;
 }
-.paper p { margin: 8px 0 0; line-height: 1.75; font-family: var(--serif); overflow-wrap: anywhere; }
+.paper p, .paper li { margin: 8px 0 0; line-height: 1.75; font-family: var(--serif); overflow-wrap: anywhere; }
+.paper ul { margin: 4px 0 0; padding-left: 1.25em; }
 .count { color: var(--muted); font-family: var(--sans); font-size: 0.82rem; }
 .empty {
   color: var(--muted);
@@ -321,5 +322,5 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   }
   .paper h2 { font-size: 18pt; }
   .paper h3 { font-size: 14pt; }
-  .paper p, .paper h4, .dateline { font-size: 10.5pt; line-height: 1.55; }
+  .paper p, .paper li, .paper h4, .dateline { font-size: 10.5pt; line-height: 1.55; }
 }

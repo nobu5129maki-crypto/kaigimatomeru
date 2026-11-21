@@ -29,6 +29,23 @@ const headings = new Set([
   '次回',
   '確認事項',
   '会議のまとめ',
+  '結論',
+  '経緯',
+  '流れ',
+  'まとまったこと',
+  '残っていること',
+  'ほか',
+  'やること',
+  '期限',
+  '関連する話',
+  '要旨',
+  '本文',
+  '何を',
+  'なぜ',
+  'いつ',
+  'どこで',
+  'どのように',
+  '誰が',
 ])
 
 function digitsOf(text: string): string[] {
@@ -177,6 +194,34 @@ describe('まとめ', () => {
     })
     expect(doc.plain).toContain('決まったこと')
     expect(doc.plain).toMatch(/論点|保留/)
+  })
+
+  it('見出しと箇条書きは、見出しと項目になる', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c200',
+      style: 'titledList',
+    })
+    expect(doc.headline.length).toBeGreaterThan(0)
+    expect(doc.blocks.some((block) => block.list)).toBe(true)
+    expect(documentText(doc)).toContain('・')
+    expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
+  })
+
+  it('箇条書きは項目だけで並べる', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c200',
+      style: 'bullets',
+    })
+    expect(doc.blocks.every((block) => block.list)).toBe(true)
+    expect(doc.plain).toContain('980')
   })
 
   it('議事録は決定事項を出す', () => {

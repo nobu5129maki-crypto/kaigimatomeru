@@ -15,7 +15,7 @@ export function markdownDocument(doc: SummaryResult): string {
   if (doc.headline && doc.headline !== doc.title) lines.push('', `## ${doc.headline}`)
   for (const block of doc.blocks) {
     if (block.heading) lines.push('', `### ${block.heading}`)
-    for (const line of block.lines) lines.push('', line)
+    for (const line of block.lines) lines.push('', block.list ? `- ${line}` : line)
   }
   lines.push('')
   return lines.join('\n')
@@ -69,7 +69,7 @@ function makeDocument(doc: SummaryResult): Document {
       children.push(
         new Paragraph({
           spacing: { after: 80 },
-          children: [textRun(line)],
+          children: [textRun(block.list ? `・${line}` : line)],
         }),
       )
     }
