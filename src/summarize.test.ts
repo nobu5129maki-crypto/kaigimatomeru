@@ -5,6 +5,7 @@ import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from '
 import {
   LENGTHS,
   STYLES,
+  toggleShape,
   charCount,
   documentText,
   formatJapaneseDate,
@@ -166,6 +167,29 @@ describe('まとめ', () => {
     expect(doc.note).toContain('足していません')
     expect(doc.plain).toContain('本社')
     expect(doc.plain).not.toContain('980')
+  })
+
+  it('形はいくつ選んでも、原稿にあることだけを見出しで分ける', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c800',
+      style: 'bullets',
+      shapes: ['bullets', 'todo'],
+    })
+    expect(doc.styleLabel).toContain('箇条書き')
+    expect(doc.styleLabel).toContain('やること')
+    expect(doc.plain).toContain('箇条書き')
+    expect(doc.plain).toContain('やること')
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+    expect(doc.charCount).toBeGreaterThan(0)
+    for (const n of digitsOf(doc.plain)) {
+      expect(SAMPLE_TRANSCRIPT.replace(/,/g, '')).toContain(n)
+    }
+    expect(toggleShape(['bullets'], 'bullets', true)).toEqual(['bullets'])
+    expect(toggleShape(['bullets'], 'todo', true)).toEqual(['bullets', 'todo'])
   })
 
   it('例文は長さの上限を守り、原稿にあることだけを書く', () => {

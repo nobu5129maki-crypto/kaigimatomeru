@@ -1,6 +1,7 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
 import { audioFileName, formatClock, liveTranscript, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
+import { isRecorderFile, transcribeRecording } from './fileEar'
 import { decodeTextFile, transcriptFromFile } from './importText'
 import {
   combineRoster,
@@ -18,7 +19,9 @@ import {
   STYLES,
   charCount,
   documentText,
+  normalizeShapes,
   summarize,
+  toggleShape,
   type LengthId,
   type StyleId,
   type SummaryResult,
@@ -37,9 +40,10 @@ type HistoryItem = {
   transcript: string
   length: LengthId
   style: StyleId
+  shapes?: StyleId[]
 }
 
-type Pref = { length: LengthId; style: StyleId }
+type Pref = { length: LengthId; style: StyleId; shapes: StyleId[] }
 
 function todayIso(): string {
   const now = new Date()
@@ -67,7 +71,8 @@ function isHistory(value: unknown): value is HistoryItem {
     typeof item.attendees === 'string' &&
     typeof item.transcript === 'string' &&
     isLength(item.length) &&
-    isStyle(item.style)
+    isStyle(item.style) &&
+    (item.shapes === undefined || (Array.isArray(item.shapes) && item.shapes.every(isStyle)))
   )
 }
 
@@ -99,15 +104,28 @@ function loadRoster(): Roster {
   }
 }
 
+function historyCaption(item: HistoryItem): string {
+  if (STYLES[item.style].group === 'shape') {
+    const labels = normalizeShapes(item.shapes, item.style).map((id) => STYLES[id].label)
+    return `${labels.join('、')}／${LENGTHS[item.length].label}`
+  }
+  if (item.style === 'point') return STYLES[item.style].label
+  return `${STYLES[item.style].label}／${LENGTHS[item.length].label}`
+}
+
 function loadPref(): Pref {
+  const fallback = { length: 'c200' as LengthId, style: 'news' as StyleId, shapes: normalizeShapes(undefined, 'bullets') }
   try {
     const parsed = JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') as Partial<Pref>
+    const style = isStyle(parsed.style) ? parsed.style : fallback.style
+    const shapes = Array.isArray(parsed.shapes) ? parsed.shapes.filter(isStyle) : undefined
     return {
-      length: isLength(parsed.length) ? parsed.length : 'c200',
-      style: isStyle(parsed.style) ? parsed.style : 'news',
+      length: isLength(parsed.length) ? parsed.length : fallback.length,
+      style,
+      shapes: normalizeShapes(shapes, STYLES[style].group === 'shape' ? style : 'bullets'),
     }
   } catch {
-    return { length: 'c200', style: 'news' }
+    return fallback
   }
 }
 
@@ -134,7 +152,9 @@ function signatureOf(input: {
   attendees: string
   length: LengthId
   style: StyleId
+  shapes?: StyleId[]
 }): string {
+  const shapes = STYLES[input.style].group === 'shape' ? normalizeShapes(input.shapes, input.style) : []
   return JSON.stringify({
     transcript: input.transcript.trim(),
     title: input.title.trim(),
@@ -142,6 +162,7 @@ function signatureOf(input: {
     attendees: input.attendees.trim(),
     length: input.length,
     style: input.style,
+    shapes,
   })
 }
 
@@ -160,6 +181,8 @@ export function App() {
   const [audioExt, setAudioExt] = useState('webm')
   const [length, setLength] = useState<LengthId>(pref.current.length)
   const [style, setStyle] = useState<StyleId>(pref.current.style)
+  const [shapes, setShapes] = useState<StyleId[]>(pref.current.shapes)
+  const [importing, setImporting] = useState(false)
   const [doc, setDoc] = useState<SummaryResult | null>(null)
   const [signed, setSigned] = useState('')
   const [notice, setNotice] = useState('')
@@ -173,6 +196,8 @@ export function App() {
   const recorderRef = useRef<MeetingRecorder | null>(null)
   const audioBlobRef = useRef<Blob | null>(null)
   const audioUrlRef = useRef('')
+  const importAbort = useRef<AbortController | null>(null)
+  const audioFileRef = useRef<HTMLInputElement>(null)
 
   const micBlock = recordingBlock()
 
@@ -195,8 +220,8 @@ export function App() {
   }
 
   useEffect(() => {
-    localStorage.setItem(PREF_KEY, JSON.stringify({ length, style }))
-  }, [length, style])
+    localStorage.setItem(PREF_KEY, JSON.stringify({ length, style, shapes }))
+  }, [length, style, shapes])
 
   useEffect(() => {
     if (phase !== 'live') return
@@ -291,10 +316,55 @@ export function App() {
     else setNotice('音声ファイルを保存しました。')
   }
 
+  async function openRecorder(file: File) {
+    if (phase === 'live') {
+      setNotice('録音を止めてから、ボイスレコーダーのファイルを開いてください。')
+      return
+    }
+    importAbort.current?.abort()
+    const controller = new AbortController()
+    importAbort.current = controller
+    const base = transcript.trim()
+    setImporting(true)
+    setRecError('')
+    try {
+      const text = await transcribeRecording(file, {
+        signal: controller.signal,
+        onStatus: (note) => {
+          if (!controller.signal.aborted) setNotice(note)
+        },
+        onText: (heard) => {
+          if (controller.signal.aborted) return
+          setTranscript(base ? `${base}\n${heard}` : heard)
+        },
+      })
+      if (controller.signal.aborted) return
+      if (!text) {
+        setNotice('話している部分を読み取れませんでした。別の録音を試すか、文字を貼り付けてください。')
+        return
+      }
+      setNotice(`${file.name} を文字にしました。まとめ方を選んで、まとめてください。`)
+    } catch (error) {
+      if (controller.signal.aborted) return
+      const reason = error instanceof Error ? error.message : ''
+      if (reason === 'unreadable') {
+        setNotice('この録音は読めませんでした。mp3かwavで書き出して、もう一度開いてください。')
+      } else if (reason === 'short' || reason === 'quiet') {
+        setNotice('話している音が短すぎます。録音そのものを開いてください。')
+      } else if (reason === 'cancelled') {
+        setNotice('文字起こしを止めました。')
+      } else {
+        setNotice('録音の文字起こしが途中で止まりました。欄に残った文字はそのまままとめられます。')
+      }
+    } finally {
+      if (importAbort.current === controller) importAbort.current = null
+      setImporting(false)
+    }
+  }
+
   async function readFile(file: File) {
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-    if (file.type.startsWith('audio/') || file.type.startsWith('video/') || ['mp3', 'm4a', 'wav', 'mp4', 'webm', 'aac'].includes(ext)) {
-      setNotice('音声ファイルの自動文字起こしには対応していません。録音ボタンを使うか、文字起こしのテキストを開いてください。')
+    if (isRecorderFile(file)) {
+      await openRecorder(file)
       return
     }
     let decoded = ''
@@ -320,9 +390,9 @@ export function App() {
   function runSummary() {
     if (phase === 'live') return
     keepNames()
-    const next = summarize({ text: transcript, title, date, attendees, length, style })
+    const next = summarize({ text: transcript, title, date, attendees, length, style, shapes })
     setDoc(next)
-    setSigned(signatureOf({ transcript, title, date, attendees, length, style }))
+    setSigned(signatureOf({ transcript, title, date, attendees, length, style, shapes }))
     setNotice(next.note)
     if (next.charCount > 0) {
       const item: HistoryItem = {
@@ -334,8 +404,9 @@ export function App() {
         transcript: transcript.trim(),
         length,
         style,
+        shapes: STYLES[style].group === 'shape' ? shapes : undefined,
       }
-      const prev = loadHistory().filter((entry) => entry.transcript !== item.transcript || entry.style !== item.style || entry.length !== item.length)
+      const prev = loadHistory().filter((entry) => entry.transcript !== item.transcript || entry.style !== item.style || entry.length !== item.length || JSON.stringify(entry.shapes ?? []) !== JSON.stringify(item.shapes ?? []))
       remember([item, ...prev])
     }
     window.setTimeout(() => {
@@ -345,6 +416,7 @@ export function App() {
   }
 
   function clearTranscript() {
+    importAbort.current?.abort()
     recorderRef.current?.clearText()
     setTranscript('')
     setInterim('')
@@ -374,10 +446,10 @@ export function App() {
     setNotice('テキストを保存しました。メモ帳やWordで開けます。')
   }
 
-  const currentSignature = signatureOf({ transcript, title, date, attendees, length, style })
+  const currentSignature = signatureOf({ transcript, title, date, attendees, length, style, shapes })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
   const shownTranscript = phase === 'live' ? liveTranscript(transcript, interim) : transcript
-  const canSummarize = phase !== 'live' && charCount(transcript) > 0
+  const canSummarize = phase !== 'live' && !importing && charCount(transcript) > 0
   const canClear = phase !== 'live' && charCount(shownTranscript) > 0
 
   return (
@@ -517,6 +589,9 @@ export function App() {
             <button type="button" className="ghost" onClick={() => fileRef.current?.click()}>
               文字ファイルを開く
             </button>
+            <button type="button" className="ghost" disabled={importing || phase === 'live'} onClick={() => audioFileRef.current?.click()}>
+              {importing ? '文字にしています' : 'ボイスレコーダーを開く'}
+            </button>
             <input
               ref={fileRef}
               className="file"
@@ -526,6 +601,17 @@ export function App() {
                 const file = event.target.files?.[0]
                 event.target.value = ''
                 if (file) void readFile(file)
+              }}
+            />
+            <input
+              ref={audioFileRef}
+              className="file"
+              type="file"
+              accept="audio/*,.mp3,.m4a,.wav,.aac,.mp4,.ogg,.webm,.3gp,.wma,.flac"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file) void openRecorder(file)
               }}
             />
           </div>
@@ -609,28 +695,44 @@ export function App() {
               ))}
             </div>
           </fieldset>
-          {STYLE_GROUPS.map((group) => (
-            <fieldset key={group.id}>
-              <legend>{group.label}</legend>
-              <div className="choices styles" role="radiogroup" aria-label={group.label}>
-                {(Object.keys(STYLES) as StyleId[])
-                  .filter((id) => STYLES[id].group === group.id)
-                  .map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="radio"
-                      aria-checked={style === id}
-                      className={style === id ? 'choice is-on' : 'choice'}
-                      onClick={() => setStyle(id)}
-                    >
-                      <strong>{STYLES[id].label}</strong>
-                      <span>{STYLES[id].hint}</span>
-                    </button>
-                  ))}
-              </div>
-            </fieldset>
-          ))}
+          {STYLE_GROUPS.map((group) => {
+            const multi = group.id === 'shape'
+            const shapeMode = STYLES[style].group === 'shape'
+            return (
+              <fieldset key={group.id}>
+                <legend>{multi ? `${group.label}（いくつでも）` : group.label}</legend>
+                <div className="choices styles" role={multi ? 'group' : 'radiogroup'} aria-label={group.label}>
+                  {(Object.keys(STYLES) as StyleId[])
+                    .filter((id) => STYLES[id].group === group.id)
+                    .map((id) => {
+                      const on = multi ? shapeMode && shapes.includes(id) : style === id
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          role={multi ? 'button' : 'radio'}
+                          aria-pressed={multi ? on : undefined}
+                          aria-checked={multi ? undefined : on}
+                          className={on ? 'choice is-on' : 'choice'}
+                          onClick={() => {
+                            if (!multi) {
+                              setStyle(id)
+                              return
+                            }
+                            const next = toggleShape(shapes, id, shapeMode)
+                            setShapes(next)
+                            setStyle(next[0] ?? id)
+                          }}
+                        >
+                          <strong>{STYLES[id].label}</strong>
+                          <span>{STYLES[id].hint}</span>
+                        </button>
+                      )
+                    })}
+                </div>
+              </fieldset>
+            )
+          })}
           <button type="button" className="summarize" disabled={!canSummarize} onClick={runSummary}>
             {phase === 'live' ? '録音を止めてからまとめます' : 'この内容をまとめる'}
           </button>
@@ -707,6 +809,7 @@ export function App() {
                         setTranscript(item.transcript)
                         setLength(item.length)
                         setStyle(item.style)
+                        setShapes(normalizeShapes(item.shapes, STYLES[item.style].group === 'shape' ? item.style : 'bullets'))
                         const next = summarize({
                           text: item.transcript,
                           title: item.title,
@@ -714,6 +817,7 @@ export function App() {
                           attendees: item.attendees,
                           length: item.length,
                           style: item.style,
+                          shapes: item.shapes,
                         })
                         setDoc(next)
                         setSigned(signatureOf(item))
@@ -722,7 +826,7 @@ export function App() {
                     >
                       <strong>{item.title || '無題の会議'}</strong>
                       <span>
-                        {item.date}　{item.style === 'point' ? STYLES[item.style].label : `${STYLES[item.style].label}／${LENGTHS[item.length].label}`}
+                        {item.date}　{historyCaption(item)}
                       </span>
                     </button>
                     <button

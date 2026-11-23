@@ -64,6 +64,8 @@ export type SummarizeInput = {
   attendees: string
   length: LengthId
   style: StyleId
+  shapes?: StyleId[]
+  budget?: { min: number; max: number; target: number }
 }
 
 export type SummaryBlock = {
@@ -117,9 +119,89 @@ export function formatJapaneseDate(iso: string): string {
   return `${Number(match[1])}年${Number(match[2])}月${Number(match[3])}日`
 }
 
+export function shapeIds(): StyleId[] {
+  return (Object.keys(STYLES) as StyleId[]).filter((id) => STYLES[id].group === 'shape')
+}
+
+export function normalizeShapes(shapes: StyleId[] | undefined, fallback: StyleId): StyleId[] {
+  const allowed = new Set(shapeIds())
+  const ordered = shapeIds().filter((id) => shapes?.includes(id))
+  if (ordered.length > 0) return ordered
+  return allowed.has(fallback) ? [fallback] : ['bullets']
+}
+
+export function toggleShape(current: StyleId[], id: StyleId, activeIsShape: boolean): StyleId[] {
+  if (!shapeIds().includes(id)) return normalizeShapes(current, 'bullets')
+  if (!activeIsShape) return normalizeShapes(current.includes(id) ? current : [...current, id], id)
+  if (current.includes(id) && current.length === 1) return normalizeShapes(current, id)
+  const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+  return normalizeShapes(next, id)
+}
+
 export function summarize(input: SummarizeInput): SummaryResult {
-  if (input.style === 'point') return summarizePoint(input)
+  if (STYLES[input.style].group === 'shape') return summarizeShapes(input)
+  return summarizeOne(input)
+}
+
+function summarizeShapes(input: SummarizeInput): SummaryResult {
+  const picked = normalizeShapes(input.shapes, input.style)
+  if (picked.length <= 1) return summarizeOne({ ...input, style: picked[0] ?? input.style })
   const length = LENGTHS[input.length]
+  const count = picked.length
+  const parts = picked.map((style) =>
+    summarizeOne({
+      ...input,
+      style,
+      budget: {
+        target: Math.max(36, Math.floor(length.target / count)),
+        min: Math.max(1, Math.floor(length.min / count)),
+        max: Math.max(64, Math.floor(length.max / count)),
+      },
+    }),
+  )
+  return mergeShapeSummaries(parts, input)
+}
+
+function mergeShapeSummaries(parts: SummaryResult[], input: SummarizeInput): SummaryResult {
+  const length = LENGTHS[input.length]
+  const blocks: SummaryBlock[] = []
+  let headline = ''
+  for (const part of parts) {
+    if (part.charCount === 0) continue
+    if (!headline && part.headline) headline = part.headline
+    const cloned = part.blocks.map((block) => ({ heading: block.heading, lines: [...block.lines], list: block.list }))
+    if (cloned.length === 0) continue
+    if (!cloned[0].heading) cloned[0] = { ...cloned[0], heading: part.styleLabel }
+    else cloned.unshift({ heading: part.styleLabel, lines: [], list: false })
+    blocks.push(...cloned)
+  }
+  let body = finish({ headline, blocks })
+  if (body.charCount > length.max) body = forceTrim(body, length.max)
+  return {
+    title: input.title.trim() || body.headline || '会議まとめ',
+    headline: body.headline,
+    dateline: formatJapaneseDate(input.date),
+    attendees: input.attendees.trim(),
+    blocks: body.blocks,
+    plain: body.plain,
+    charCount: body.charCount,
+    target: length.target,
+    min: length.min,
+    max: length.max,
+    note:
+      body.charCount < length.min
+        ? '原稿が短いため、指定より短くなっています。話していないことは足していません。'
+        : '選んだ形を、それぞれの見出しに分けました。',
+    style: parts[0]?.style ?? input.style,
+    length: input.length,
+    styleLabel: parts.map((part) => part.styleLabel).join('、'),
+    lengthLabel: length.label,
+  }
+}
+
+function summarizeOne(input: SummarizeInput): SummaryResult {
+  if (input.style === 'point') return summarizePoint(input)
+  const span = input.budget ?? LENGTHS[input.length]
   const style = STYLES[input.style]
   const title = input.title.trim()
   const attendees = input.attendees.trim()
@@ -129,13 +211,13 @@ export function summarize(input: SummarizeInput): SummaryResult {
     title: title || '会議まとめ',
     dateline,
     attendees,
-    target: length.target,
-    min: length.min,
-    max: length.max,
+    target: span.target,
+    min: span.min,
+    max: span.max,
     style: input.style,
     length: input.length,
     styleLabel: style.label,
-    lengthLabel: length.label,
+    lengthLabel: LENGTHS[input.length].label,
   }
 
   if (units.length === 0) {
@@ -149,9 +231,9 @@ export function summarize(input: SummarizeInput): SummaryResult {
     }
   }
 
-  const fitted = fitUnits(units, input.style, title, length.max, length.min, length.target)
+  const fitted = fitUnits(units, input.style, title, span.max, span.min, span.target)
   let note = ''
-  if (fitted.charCount < length.min) {
+  if (fitted.charCount < span.min) {
     note = '原稿が短いため、指定より短くなっています。話していないことは足していません。'
   }
   return {
