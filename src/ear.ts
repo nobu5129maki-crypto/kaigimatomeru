@@ -17,6 +17,53 @@ export function pcmEnergy(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length)
 }
 
+export const ROOM_GAIN = 2.4
+
+export function boostForRoom(frame: Float32Array): Float32Array {
+  let peak = 0
+  for (let i = 0; i < frame.length; i += 1) peak = Math.max(peak, Math.abs(frame[i]))
+  if (peak >= 0.2 || peak < 0.004) return new Float32Array(frame)
+  const gain = Math.min(ROOM_GAIN, 0.28 / peak)
+  const out = new Float32Array(frame.length)
+  for (let i = 0; i < frame.length; i += 1) out[i] = Math.max(-1, Math.min(1, frame[i] * gain))
+  return out
+}
+
+export function collapseRepeats(text: string): string {
+  let out = text
+  for (let guard = 0; guard < 8; guard += 1) {
+    const next = collapseOnce(out)
+    if (next === out) break
+    out = next
+  }
+  return out
+}
+
+function collapseOnce(text: string): string {
+  const max = Math.min(18, Math.floor(text.length / 3))
+  for (let size = max; size >= 4; size -= 1) {
+    for (let start = 0; start + size * 3 <= text.length; start += 1) {
+      const phrase = text.slice(start, start + size)
+      if (phrase.trim().length < 4 || /[、,，\s]/.test(phrase)) continue
+      let count = 1
+      let end = start + size
+      while (end < text.length) {
+        const sep = /^[、,，\s]+/.exec(text.slice(end))
+        const sepLen = sep ? sep[0].length : 0
+        if (text.slice(end + sepLen, end + sepLen + size) !== phrase) break
+        count += 1
+        end += sepLen + size
+      }
+      if (count >= 2) return text.slice(0, start) + phrase + text.slice(end)
+    }
+  }
+  return text
+}
+
+export function isRoomSpeech(rms: number, floor: number): boolean {
+  return rms >= Math.max(0.012, floor * 1.8)
+}
+
 export function downsample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
   if (fromRate === toRate) return new Float32Array(input)
   const ratio = fromRate / toRate
@@ -50,7 +97,7 @@ export function cleanHeard(text: string): string {
   const compact = trimmed.replace(/\s/g, '').toLowerCase()
   if (compact.length < 48 && HALLUCINATIONS.some((item) => compact.includes(item.replace(/\s/g, '').toLowerCase()))) return ''
   if (/^[（(][^）)]{0,24}[）)]$/.test(trimmed)) return ''
-  return trimmed
+  return collapseRepeats(trimmed)
 }
 
 export function decideEar(input: {
@@ -61,7 +108,7 @@ export function decideEar(input: {
 }): 'wait' | 'partial' | 'final' {
   if (!input.pending) return 'wait'
   if (input.silenceMs >= 700 && input.speechMs >= 300) return 'final'
-  if (input.speechMs >= 2000) return 'final'
+  if (input.speechMs >= 5000) return 'final'
   if (input.silenceMs < 400 && input.speechMs >= 700 && input.sincePartialMs >= 1200) return 'partial'
   return 'wait'
 }
@@ -92,7 +139,7 @@ export class LiveEar {
   private speechMs = 0
   private silenceMs = 0
   private sincePartialMs = 0
-  private floor = 0.008
+  private floor = 0.006
   private ownsContext = false
   private speaking = false
   private paused = false
@@ -140,7 +187,7 @@ export class LiveEar {
     mute.gain.value = 0.00001
     processor.onaudioprocess = (event) => {
       const channel = event.inputBuffer.getChannelData(0)
-      this.push(downsample(channel, ctx.sampleRate, TARGET_RATE))
+      this.push(boostForRoom(downsample(channel, ctx.sampleRate, TARGET_RATE)))
     }
     source.connect(processor)
     processor.connect(mute)
@@ -255,7 +302,7 @@ export class LiveEar {
     if (this.paused) return
     const rms = pcmEnergy(frame)
     const frameMs = (frame.length / TARGET_RATE) * 1000
-    const loud = rms >= Math.max(0.01, this.floor * 2.2)
+    const loud = isRoomSpeech(rms, this.floor)
     if (!loud && !this.speaking) {
       this.floor = this.floor * 0.92 + rms * 0.08
       return

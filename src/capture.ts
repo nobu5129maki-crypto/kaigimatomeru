@@ -56,6 +56,49 @@ export function liveTranscript(committed: string, interim: string): string {
   return appendRecognized(committed, pending)
 }
 
+export function roomMicConstraints(): MediaTrackConstraints {
+  return {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: true,
+    channelCount: 1,
+    sampleRate: { ideal: 48000 },
+    voiceIsolation: false,
+  } as MediaTrackConstraints
+}
+
+function compactHeard(text: string): string {
+  return text.replace(/[\s、。！？!?・「」『』（）()]/g, '')
+}
+
+export function heardAlready(previous: string, incoming: string): boolean {
+  const next = compactHeard(incoming)
+  if (next.length < 4) return true
+  const prev = compactHeard(previous)
+  if (!prev) return false
+  const window = prev.slice(-Math.max(next.length * 2, 80))
+  if (window.includes(next)) return true
+  const size = 6
+  if (next.length < size) return false
+  let hit = 0
+  let total = 0
+  for (let i = 0; i <= next.length - size; i += 2) {
+    total += 1
+    if (window.includes(next.slice(i, i + size))) hit += 1
+  }
+  return total > 0 && hit / total >= 0.6
+}
+
+export function mergeHeard(previous: string, incoming: string): string {
+  const next = incoming.trim()
+  if (!next || heardAlready(previous, next)) return previous
+  const prev = previous.replace(/\s+$/g, '')
+  if (!prev) return next
+  const merged = appendRecognized(prev, next)
+  if (merged !== prev + next) return merged
+  return `${prev}\n${next}`
+}
+
 export function appendRecognized(previous: string, incoming: string): string {
   const next = incoming.trim()
   if (!next) return previous
@@ -124,18 +167,22 @@ export class MeetingRecorder {
     this.listener = listener
     this.ear = new LiveEar({
       onPartial: (text) => {
-        if (this.phase !== 'live' || this.speechHeard) return
+        if (this.phase !== 'live' || this.interimSpeech.trim()) return
+        if (heardAlready(this.base, text)) return
         this.markHeard()
         this.emitText(text)
       },
       onFinal: (text) => {
-        if (this.speechHeard) return
-        this.commitHeard(text)
-        this.emitText('')
+        const merged = mergeHeard(this.base, text)
+        if (merged === this.base) return
+        this.base = merged
+        this.lastVoiceAt = performance.now()
+        this.markHeard()
+        this.emitText(this.interimSpeech)
       },
       onStatus: (note) => {
         if (this.phase === 'idle') return
-        if (this.speech && note.includes('準備')) return
+        if (this.speechHeard && !note.includes('準備')) return
         this.listener.onNote(note)
       },
     })
@@ -151,9 +198,7 @@ export class MeetingRecorder {
   async start(existing: string): Promise<string> {
     const blocked = recordingBlock()
     if (blocked) return blocked
-    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-      return 'このブラウザは話しながらの文字起こしができません。ChromeまたはEdgeで開いてください。'
-    }
+    const canSpeech = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition)
     this.destroyQuiet()
     const generation = ++this.generation
     this.base = existing.trim() ? `${existing.replace(/\s+$/g, '')}\n` : ''
@@ -167,16 +212,22 @@ export class MeetingRecorder {
     this.localStarted = false
     this.phase = 'live'
     this.mark = performance.now()
-    this.wantSpeech = true
-    this.openSpeech()
-    if (!this.speech) {
+    this.wantSpeech = canSpeech
+    if (canSpeech) this.openSpeech()
+    if (canSpeech && !this.speech) {
       this.failStart()
       return '文字起こしを始められませんでした。もう一度押してください。'
     }
     this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
     this.emitPhase()
     this.emitText('')
-    this.listener.onNote('話した言葉を、文字起こし欄へ順に出します。')
+    this.primeAudio()
+    void this.beginLocal()
+    this.listener.onNote(
+      canSpeech
+        ? '自分の声はすぐに文字にします。ラジオなどスピーカーの音は、この端末の中で少し遅れて文字にします。'
+        : 'このブラウザは話しながらの音声認識がありません。マイクの音を、この端末の中で文字にします。',
+    )
     document.addEventListener('visibilitychange', this.onVisible)
     void this.claimWake()
     if (this.generation !== generation) return ''
@@ -353,21 +404,19 @@ export class MeetingRecorder {
   }
 
   private async beginLocal(): Promise<void> {
-    if (this.localStarted || this.phase !== 'live' || this.speechHeard) return
+    if (this.localStarted || this.phase !== 'live') return
     this.localStarted = true
-    this.listener.onNote('ブラウザの音声認識が届かないため、この端末で文字にしています。少し遅れて欄に出ます。')
     let stream: MediaStream
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: { ideal: 1 },
-        },
-      })
+      // エコー除去と雑音抑制は、スピーカーのラジオを声以外として消す。
+      stream = await navigator.mediaDevices.getUserMedia({ audio: roomMicConstraints() })
     } catch {
-      if (this.phase === 'live') this.listener.onNote('文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。')
+      if (this.phase !== 'live') return
+      this.listener.onNote(
+        this.speech
+          ? 'スピーカーの音を拾うマイクを開けませんでした。自分の声の文字起こしは続きます。'
+          : '文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。',
+      )
       return
     }
     if (this.phase !== 'live') {
@@ -380,8 +429,7 @@ export class MeetingRecorder {
     try {
       this.openRecorder(stream)
     } catch {
-      this.listener.onNote('文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。')
-      return
+      this.listener.onNote('音声ファイルは保存できません。文字起こしは続けます。')
     }
     this.ear.open(stream, this.liveCtx)
     this.pumpLevel()

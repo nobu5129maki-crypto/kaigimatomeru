@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanHeard, concatFloats, decideEar, downsample, pcmEnergy } from './ear'
+import { boostForRoom, cleanHeard, concatFloats, decideEar, downsample, isRoomSpeech, pcmEnergy } from './ear'
 
 describe('端末内の文字起こし', () => {
   it('無音はエネルギーがゼロ', () => {
@@ -27,11 +27,24 @@ describe('端末内の文字起こし', () => {
     expect(cleanHeard('ご視聴ありがとうございました')).toBe('')
     expect(cleanHeard('（拍手）')).toBe('')
     expect(cleanHeard('価格は980円です。')).toBe('価格は980円です。')
+    expect(cleanHeard('社会拡充で、社会拡充で、社会拡充で、社会拡充で')).toBe('社会拡充で')
+  })
+
+  it('小さなスピーカーの音は拾い、静かな部屋は拾わない', () => {
+    const quiet = new Float32Array(32)
+    quiet.fill(0.001)
+    const radio = new Float32Array(32)
+    radio.fill(0.008)
+    expect(isRoomSpeech(pcmEnergy(boostForRoom(quiet)), 0.006)).toBe(false)
+    expect(isRoomSpeech(pcmEnergy(boostForRoom(radio)), 0.006)).toBe(true)
+    const loud = new Float32Array(32)
+    loud.fill(0.6)
+    expect(boostForRoom(loud)[0]).toBeCloseTo(0.6)
   })
 
   it('話している途中は欄へ出し、間が空いたら確定する', () => {
     expect(decideEar({ pending: true, speechMs: 1300, silenceMs: 0, sincePartialMs: 1300 })).toBe('partial')
-    expect(decideEar({ pending: true, speechMs: 2100, silenceMs: 0, sincePartialMs: 100 })).toBe('final')
+    expect(decideEar({ pending: true, speechMs: 5100, silenceMs: 0, sincePartialMs: 100 })).toBe('final')
     expect(decideEar({ pending: true, speechMs: 500, silenceMs: 800, sincePartialMs: 800 })).toBe('final')
     expect(decideEar({ pending: false, speechMs: 0, silenceMs: 0, sincePartialMs: 0 })).toBe('wait')
   })
