@@ -5,7 +5,6 @@ import { SAMPLE_ATTENDEES, SAMPLE_DATE, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from '
 import {
   LENGTHS,
   STYLES,
-  toggleShape,
   charCount,
   documentText,
   formatJapaneseDate,
@@ -169,29 +168,6 @@ describe('まとめ', () => {
     expect(doc.plain).not.toContain('980')
   })
 
-  it('形はいくつ選んでも、原稿にあることだけを見出しで分ける', () => {
-    const doc = summarize({
-      text: SAMPLE_TRANSCRIPT,
-      title: SAMPLE_TITLE,
-      date: SAMPLE_DATE,
-      attendees: SAMPLE_ATTENDEES,
-      length: 'c800',
-      style: 'bullets',
-      shapes: ['bullets', 'todo'],
-    })
-    expect(doc.styleLabel).toContain('箇条書き')
-    expect(doc.styleLabel).toContain('やること')
-    expect(doc.plain).toContain('箇条書き')
-    expect(doc.plain).toContain('やること')
-    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
-    expect(doc.charCount).toBeGreaterThan(0)
-    for (const n of digitsOf(doc.plain)) {
-      expect(SAMPLE_TRANSCRIPT.replace(/,/g, '')).toContain(n)
-    }
-    expect(toggleShape(['bullets'], 'bullets', true)).toEqual(['bullets'])
-    expect(toggleShape(['bullets'], 'todo', true)).toEqual(['bullets', 'todo'])
-  })
-
   it('例文は長さの上限を守り、原稿にあることだけを書く', () => {
     for (const length of lengths) {
       for (const style of styles) {
@@ -279,6 +255,40 @@ describe('まとめ', () => {
     })
     expect(doc.blocks.every((block) => block.list)).toBe(true)
     expect(doc.plain).toContain('980')
+  })
+
+  it('形を複数選ぶと、それぞれの見出しで一つの原稿に並ぶ', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'bullets',
+      styles: ['bullets', 'todo'],
+    })
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+    expect(doc.charCount).toBeGreaterThan(0)
+    expect(doc.styleLabel).toContain('箇条書き')
+    expect(doc.styleLabel).toContain('やること')
+    expect(doc.blocks.some((block) => block.heading.includes('箇条書き'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('やること'))).toBe(true)
+    expect(doc.plain).toContain('980')
+  })
+
+  it('短い原稿でも、選んだ形の見出しは残る', () => {
+    const doc = summarize({
+      text: '初回価格は980円に決定しました。田中が来週までに広告案を出します。',
+      title: '',
+      date: SAMPLE_DATE,
+      attendees: '',
+      length: 'c400',
+      style: 'bullets',
+      styles: ['bullets', 'todo'],
+    })
+    expect(doc.blocks.some((block) => block.heading.includes('箇条書き'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('やること'))).toBe(true)
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
   })
 
   it('要は何が言いたいは、長い答えだけを箇条書きにする', () => {
