@@ -6,7 +6,7 @@ const wasm = env.backends.onnx.wasm
 if (wasm) wasm.numThreads = 1
 
 type Warm = { type: 'warm' }
-type Hear = { type: 'hear'; id: number; pcm: Float32Array; final: boolean }
+type Hear = { type: 'hear'; id: number; pcm: Float32Array; final: boolean; beams?: number }
 type Request = Warm | Hear
 
 type Transcriber = (
@@ -27,16 +27,24 @@ function reportProgress(update: { status?: string; progress?: number }): void {
   scope.postMessage({ type: 'progress', progress: Math.max(0, Math.min(100, update.progress)) })
 }
 
+async function loadModel(model: string): Promise<Transcriber> {
+  const created = await pipeline('automatic-speech-recognition', model, {
+    device: 'wasm',
+    dtype: 'q8',
+    progress_callback: reportProgress,
+  })
+  return created as Transcriber
+}
+
 function warm(): Promise<void> {
   if (transcriber) return Promise.resolve()
   if (warming) return warming
   warming = (async () => {
-    const created = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
-      device: 'wasm',
-      dtype: 'q8',
-      progress_callback: reportProgress,
-    })
-    transcriber = created as Transcriber
+    try {
+      transcriber = await loadModel('Xenova/whisper-small')
+    } catch {
+      transcriber = await loadModel('Xenova/whisper-tiny')
+    }
     scope.postMessage({ type: 'ready' })
   })().catch((error: unknown) => {
     warming = null
@@ -58,7 +66,7 @@ scope.onmessage = (event) => {
         language: 'japanese',
         task: 'transcribe',
         do_sample: false,
-        num_beams: 2,
+        num_beams: data.beams === 2 ? 2 : 1,
       })
       const text = typeof result === 'string' ? result : (result?.text ?? '')
       scope.postMessage({ type: 'text', id: data.id, text, final: data.final })

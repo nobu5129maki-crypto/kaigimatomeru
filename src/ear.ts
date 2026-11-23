@@ -109,7 +109,7 @@ export function decideEar(input: {
 }): 'wait' | 'partial' | 'final' {
   if (!input.pending) return 'wait'
   if (input.silenceMs >= 700 && input.speechMs >= 300) return 'final'
-  if (input.speechMs >= 12000) return 'final'
+  if (input.speechMs >= 6000) return 'final'
   if (input.silenceMs < 400 && input.speechMs >= 700 && input.sincePartialMs >= 1200) return 'partial'
   return 'wait'
 }
@@ -328,16 +328,17 @@ export class LiveEar {
       }
     }
     const decision = decideEar({
-      pending: this.sampleCount >= TARGET_RATE * 0.8,
+      pending: this.sampleCount >= TARGET_RATE * 0.45,
       speechMs: this.speechMs,
       silenceMs: this.silenceMs,
       sincePartialMs: this.sincePartialMs,
     })
     if (decision === 'final') this.flush(true)
+    else if (decision === 'partial') this.flush(false)
   }
 
   private flush(final: boolean): void {
-    if (this.sampleCount < TARGET_RATE * 0.8) {
+    if (this.sampleCount < TARGET_RATE * 0.45) {
       if (final) this.resetUtterance()
       return
     }
@@ -392,7 +393,7 @@ export class LiveEar {
     this.busy = true
     this.activeJob = job
     const copy = new Float32Array(job.pcm)
-    this.worker.postMessage({ type: 'hear', id: job.id, pcm: copy, final: job.final }, [copy.buffer])
+    this.worker.postMessage({ type: 'hear', id: job.id, pcm: copy, final: job.final, beams: 1 }, [copy.buffer])
   }
 
   private disconnectNodes(): void {

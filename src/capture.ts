@@ -1,7 +1,7 @@
 import { LiveEar } from './ear'
 
 const PAUSE_BREAK_MS = 1800
-const SPEECH_BITRATE = 128000
+const SPEECH_BITRATE = 256000
 
 export type RecorderPhase = 'idle' | 'live' | 'paused'
 
@@ -174,13 +174,14 @@ export class MeetingRecorder {
     this.listener = listener
     this.ear = new LiveEar({
       onPartial: (text) => {
-        if (this.phase !== 'live' || this.interimSpeech.trim()) return
+        if (this.phase !== 'live' || this.speechHeard || this.interimSpeech.trim()) return
         if (heardAlready(this.base, text)) return
         this.markHeard()
         this.emitText(text)
       },
       onFinal: (text, capturedAt, audioMs) => {
-        if (this.wantSpeech && speechCovers(this.speechMarks, capturedAt, audioMs)) return
+        const browserText = `${this.base}${this.interimSpeech}`.trim()
+        if (browserText && this.wantSpeech && speechCovers(this.speechMarks, capturedAt, audioMs)) return
         const merged = mergeHeard(this.base, text)
         if (merged === this.base) return
         this.base = merged
@@ -223,19 +224,16 @@ export class MeetingRecorder {
     this.mark = performance.now()
     this.wantSpeech = canSpeech
     if (canSpeech) this.openSpeech()
-    if (canSpeech && !this.speech) {
-      this.failStart()
-      return '文字起こしを始められませんでした。もう一度押してください。'
-    }
+    if (!this.speech) this.wantSpeech = false
     this.clockTimer = window.setInterval(() => this.emitPhase(), 250)
     this.emitPhase()
     this.emitText('')
     this.primeAudio()
     void this.beginLocal()
     this.listener.onNote(
-      canSpeech
-        ? '自分の声はすぐに文字にします。ラジオなどスピーカーの音は、より正確なモデルで、この端末の中で少し遅れて文字にします。'
-        : 'このブラウザは話しながらの音声認識がありません。マイクの音を、この端末の中で文字にします。',
+      this.speech
+        ? '自分の声はすぐに文字にします。拾えない音は、精度の高いモデルで少し遅れて足します。'
+        : 'マイクの音を、この端末の中で文字にします。少し遅れて欄に出ます。',
     )
     document.addEventListener('visibilitychange', this.onVisible)
     void this.claimWake()
@@ -384,16 +382,17 @@ export class MeetingRecorder {
     }
     recognition.onerror = (event) => {
       if (event.error === 'no-speech' || event.error === 'aborted') return
-      this.speechFails += 1
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         this.wantSpeech = false
         this.listener.onNote('マイクの音声認識がブロックされています。ブラウザの設定で許可してください。')
         return
       }
-      if (this.speechFails >= 2) {
-        this.wantSpeech = false
-        void this.beginLocal()
+      if (event.error === 'audio-capture') {
+        this.listener.onNote('自分の声の文字起こしを続けます。')
+        return
       }
+      this.speechFails += 1
+      if (this.speechFails >= 4) this.wantSpeech = false
     }
     recognition.onend = () => {
       if (this.interimSpeech) {
@@ -402,13 +401,12 @@ export class MeetingRecorder {
         this.emitText('')
       }
       this.speech = null
-      if (!this.wantSpeech || this.phase !== 'live' || this.speechFails >= 2) return
-      this.restartTimer = window.setTimeout(() => this.openSpeech(), this.speechFails > 0 ? 1000 : 300)
+      if (!this.wantSpeech || this.phase !== 'live') return
+      this.restartTimer = window.setTimeout(() => this.openSpeech(), this.speechFails > 0 ? 700 : 250)
     }
     try {
       recognition.start()
     } catch {
-      this.wantSpeech = false
       return
     }
     this.speech = recognition
@@ -423,11 +421,12 @@ export class MeetingRecorder {
       stream = await navigator.mediaDevices.getUserMedia({ audio: roomMicConstraints() })
     } catch {
       if (this.phase !== 'live') return
-      this.listener.onNote(
-        this.speech
-          ? 'スピーカーの音を拾うマイクを開けませんでした。自分の声の文字起こしは続きます。'
-          : '文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。',
-      )
+      if (this.speech) {
+        this.listener.onNote('スピーカーの音を拾うマイクを開けませんでした。自分の声の文字起こしは続きます。')
+        return
+      }
+      this.failStart()
+      this.listener.onNote('文字起こしを始められませんでした。Chromeで開き直すか、文字を貼り付けてください。')
       return
     }
     if (this.phase !== 'live') {
@@ -444,6 +443,12 @@ export class MeetingRecorder {
     }
     this.ear.open(stream, this.liveCtx)
     this.pumpLevel()
+    if (this.wantSpeech && !this.speechHeard && this.phase === 'live') {
+      this.stopSpeech()
+      this.wantSpeech = true
+      this.openSpeech()
+      if (!this.speech) this.restartTimer = window.setTimeout(() => this.openSpeech(), 400)
+    }
   }
 
   private stopSpeech(): void {

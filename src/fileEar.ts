@@ -119,7 +119,7 @@ export class FileEar {
           reject(error)
         },
       })
-      this.worker?.postMessage({ type: 'hear', id, pcm: copy, final: true })
+      this.worker?.postMessage({ type: 'hear', id, pcm: copy, final: true, beams: 2 })
     })
   }
 
