@@ -9,6 +9,7 @@ import {
   mergeHeard,
   pickRecordingFormat,
   roomMicConstraints,
+  speechCovers,
 } from './capture'
 
 describe('録音の文字', () => {
@@ -48,6 +49,11 @@ describe('録音の文字', () => {
   it('スピーカーの音は、自分の声の次の行に足す', () => {
     expect(mergeHeard('私の声です。', '本日は980円に決定しました。')).toBe('私の声です。\n本日は980円に決定しました。')
     expect(mergeHeard('私の声です。', '声です。続きです')).toBe('私の声です。続きです')
+  })
+
+  it('自分の声を聞いているあいだの端末内の文字は足さない', () => {
+    expect(speechCovers([1000], 1500, 800)).toBe(true)
+    expect(speechCovers([1000], 5000, 800)).toBe(false)
   })
 
   it('ラジオを消す処理をマイクで切る', () => {

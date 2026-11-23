@@ -56,6 +56,12 @@ export function liveTranscript(committed: string, interim: string): string {
   return appendRecognized(committed, pending)
 }
 
+export function speechCovers(marks: number[], capturedAt: number, audioMs: number): boolean {
+  const start = capturedAt - audioMs
+  const end = capturedAt + 800
+  return marks.some((mark) => mark >= start && mark <= end)
+}
+
 export function roomMicConstraints(): MediaTrackConstraints {
   return {
     echoCancellation: false,
@@ -145,6 +151,7 @@ export class MeetingRecorder {
   private speechHeard = false
   private speechFails = 0
   private interimSpeech = ''
+  private speechMarks: number[] = []
   private restartTimer = 0
   private localStarted = false
   private recorder: MediaRecorder | null = null
@@ -172,7 +179,8 @@ export class MeetingRecorder {
         this.markHeard()
         this.emitText(text)
       },
-      onFinal: (text) => {
+      onFinal: (text, capturedAt, audioMs) => {
+        if (this.wantSpeech && speechCovers(this.speechMarks, capturedAt, audioMs)) return
         const merged = mergeHeard(this.base, text)
         if (merged === this.base) return
         this.base = merged
@@ -209,6 +217,7 @@ export class MeetingRecorder {
     this.speechHeard = false
     this.speechFails = 0
     this.interimSpeech = ''
+    this.speechMarks = []
     this.localStarted = false
     this.phase = 'live'
     this.mark = performance.now()
@@ -225,7 +234,7 @@ export class MeetingRecorder {
     void this.beginLocal()
     this.listener.onNote(
       canSpeech
-        ? '自分の声はすぐに文字にします。ラジオなどスピーカーの音は、この端末の中で少し遅れて文字にします。'
+        ? '自分の声はすぐに文字にします。ラジオなどスピーカーの音は、より正確なモデルで、この端末の中で少し遅れて文字にします。'
         : 'このブラウザは話しながらの音声認識がありません。マイクの音を、この端末の中で文字にします。',
     )
     document.addEventListener('visibilitychange', this.onVisible)
@@ -362,6 +371,8 @@ export class MeetingRecorder {
       if (finals || interim) {
         this.speechHeard = true
         this.speechFails = 0
+        this.speechMarks.push(performance.now())
+        if (this.speechMarks.length > 40) this.speechMarks.splice(0, this.speechMarks.length - 40)
         this.markHeard()
       }
       if (finals) {

@@ -1,5 +1,5 @@
 import { appendRecognized } from './capture'
-import { cleanHeard, downsample, pcmEnergy } from './ear'
+import { cleanHeard, downsample, normalizeUtterance, pcmEnergy } from './ear'
 
 const TARGET_RATE = 16000
 const MAX_SECONDS = 45 * 60
@@ -66,7 +66,7 @@ export class FileEar {
     let text = ''
     for (let index = 0; index < slices.length; index += 1) {
       this.onStatus(`文字にしています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`)
-      const heard = cleanHeard(await this.hear(slices[index]))
+      const heard = cleanHeard(await this.hear(normalizeUtterance(slices[index])))
       if (heard) text = appendRecognized(text, heard)
     }
     return text.trim()

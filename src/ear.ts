@@ -17,18 +17,6 @@ export function pcmEnergy(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length)
 }
 
-export const ROOM_GAIN = 2.4
-
-export function boostForRoom(frame: Float32Array): Float32Array {
-  let peak = 0
-  for (let i = 0; i < frame.length; i += 1) peak = Math.max(peak, Math.abs(frame[i]))
-  if (peak >= 0.2 || peak < 0.004) return new Float32Array(frame)
-  const gain = Math.min(ROOM_GAIN, 0.28 / peak)
-  const out = new Float32Array(frame.length)
-  for (let i = 0; i < frame.length; i += 1) out[i] = Math.max(-1, Math.min(1, frame[i] * gain))
-  return out
-}
-
 export function collapseRepeats(text: string): string {
   let out = text
   for (let guard = 0; guard < 8; guard += 1) {
@@ -61,7 +49,20 @@ function collapseOnce(text: string): string {
 }
 
 export function isRoomSpeech(rms: number, floor: number): boolean {
-  return rms >= Math.max(0.012, floor * 1.8)
+  return rms >= Math.max(0.005, floor * 1.25)
+}
+
+export function normalizeUtterance(pcm: Float32Array): Float32Array {
+  let peak = 0
+  for (let i = 0; i < pcm.length; i += 1) peak = Math.max(peak, Math.abs(pcm[i]))
+  if (peak < 0.004 || peak >= 0.25) return pcm.slice()
+  const gain = Math.min(4, 0.5 / peak)
+  const out = new Float32Array(pcm.length)
+  for (let i = 0; i < pcm.length; i += 1) {
+    const value = pcm[i] * gain
+    out[i] = value > 1 ? 1 : value < -1 ? -1 : value
+  }
+  return out
 }
 
 export function downsample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
@@ -108,18 +109,18 @@ export function decideEar(input: {
 }): 'wait' | 'partial' | 'final' {
   if (!input.pending) return 'wait'
   if (input.silenceMs >= 700 && input.speechMs >= 300) return 'final'
-  if (input.speechMs >= 5000) return 'final'
+  if (input.speechMs >= 12000) return 'final'
   if (input.silenceMs < 400 && input.speechMs >= 700 && input.sincePartialMs >= 1200) return 'partial'
   return 'wait'
 }
 
 type EarHooks = {
   onPartial: (text: string) => void
-  onFinal: (text: string) => void
+  onFinal: (text: string, capturedAt: number, audioMs: number) => void
   onStatus: (note: string) => void
 }
 
-type EarJob = { id: number; pcm: Float32Array; final: boolean }
+type EarJob = { id: number; pcm: Float32Array; final: boolean; capturedAt: number; audioMs: number }
 
 type EarMessage =
   | { type: 'progress'; progress: number }
@@ -151,6 +152,7 @@ export class LiveEar {
   private failed = false
   private lastPercent = -1
   private lastFinalId = 0
+  private activeJob: EarJob | null = null
 
   constructor(hooks: EarHooks) {
     this.hooks = hooks
@@ -187,7 +189,7 @@ export class LiveEar {
     mute.gain.value = 0.00001
     processor.onaudioprocess = (event) => {
       const channel = event.inputBuffer.getChannelData(0)
-      this.push(boostForRoom(downsample(channel, ctx.sampleRate, TARGET_RATE)))
+      this.push(downsample(channel, ctx.sampleRate, TARGET_RATE))
     }
     source.connect(processor)
     processor.connect(mute)
@@ -274,6 +276,7 @@ export class LiveEar {
     }
     if (data.type === 'error') {
       this.busy = false
+      this.activeJob = null
       this.warming = false
       if (!this.ready) this.fail()
       else this.pump()
@@ -281,10 +284,12 @@ export class LiveEar {
     }
     if (data.type === 'text') {
       this.busy = false
+      const job = this.activeJob
+      this.activeJob = null
       const text = cleanHeard(data.text)
       if (data.final) {
         this.lastFinalId = data.id
-        if (text) this.hooks.onFinal(text)
+        if (text && job) this.hooks.onFinal(text, job.capturedAt, job.audioMs)
       } else if (data.id > this.lastFinalId && text) {
         this.hooks.onPartial(text)
       }
@@ -323,17 +328,16 @@ export class LiveEar {
       }
     }
     const decision = decideEar({
-      pending: this.sampleCount >= TARGET_RATE * 0.4,
+      pending: this.sampleCount >= TARGET_RATE * 0.8,
       speechMs: this.speechMs,
       silenceMs: this.silenceMs,
       sincePartialMs: this.sincePartialMs,
     })
     if (decision === 'final') this.flush(true)
-    else if (decision === 'partial') this.flush(false)
   }
 
   private flush(final: boolean): void {
-    if (this.sampleCount < TARGET_RATE * 0.35) {
+    if (this.sampleCount < TARGET_RATE * 0.8) {
       if (final) this.resetUtterance()
       return
     }
@@ -372,7 +376,9 @@ export class LiveEar {
   }
 
   private enqueue(pcm: Float32Array, final: boolean): void {
-    this.queue.push({ id: (this.seq += 1), pcm, final })
+    const level = normalizeUtterance(pcm)
+    const audioMs = (level.length / TARGET_RATE) * 1000
+    this.queue.push({ id: (this.seq += 1), pcm: level, final, capturedAt: performance.now(), audioMs })
     const finals = this.queue.filter((job) => job.final).slice(-4)
     const partial = this.queue.filter((job) => !job.final).slice(-1)
     this.queue = [...finals, ...partial].sort((a, b) => a.id - b.id)
@@ -384,6 +390,7 @@ export class LiveEar {
     const job = this.queue.shift()
     if (!job) return
     this.busy = true
+    this.activeJob = job
     const copy = new Float32Array(job.pcm)
     this.worker.postMessage({ type: 'hear', id: job.id, pcm: copy, final: job.final }, [copy.buffer])
   }

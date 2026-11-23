@@ -9,7 +9,10 @@ type Warm = { type: 'warm' }
 type Hear = { type: 'hear'; id: number; pcm: Float32Array; final: boolean }
 type Request = Warm | Hear
 
-type Transcriber = (audio: Float32Array, options: { language: string; task: 'transcribe' }) => Promise<{ text?: string } | string>
+type Transcriber = (
+  audio: Float32Array,
+  options: { language: string; task: 'transcribe'; do_sample: false; num_beams: number },
+) => Promise<{ text?: string } | string>
 
 let transcriber: Transcriber | null = null
 let warming: Promise<void> | null = null
@@ -28,8 +31,9 @@ function warm(): Promise<void> {
   if (transcriber) return Promise.resolve()
   if (warming) return warming
   warming = (async () => {
-    const created = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+    const created = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
       device: 'wasm',
+      dtype: 'q8',
       progress_callback: reportProgress,
     })
     transcriber = created as Transcriber
@@ -50,7 +54,12 @@ scope.onmessage = (event) => {
   if (data.type !== 'hear') return
   warm()
     .then(async () => {
-      const result = await transcriber?.(data.pcm, { language: 'japanese', task: 'transcribe' })
+      const result = await transcriber?.(data.pcm, {
+        language: 'japanese',
+        task: 'transcribe',
+        do_sample: false,
+        num_beams: 2,
+      })
       const text = typeof result === 'string' ? result : (result?.text ?? '')
       scope.postMessage({ type: 'text', id: data.id, text, final: data.final })
     })
