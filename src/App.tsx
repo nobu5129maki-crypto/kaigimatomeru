@@ -1,8 +1,15 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
-import { audioFileName, formatClock, liveTranscript, MeetingRecorder, recordingBlock, type RecorderPhase } from './capture'
+import { audioFileName, formatClock, recordingBlock } from './capture'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
 import { decodeTo16k, FileEar, isAudioFile, limitPcm } from './fileEar'
-import { decodeTextFile, transcriptFromFile } from './importText'
+import {
+  FieldRecorder,
+  formatBytes,
+  skipTo,
+  type RecMark,
+  type RecPhase,
+  type RecQuality,
+} from './studio'
 import {
   combineRoster,
   emptyRoster,
@@ -43,6 +50,14 @@ type HistoryItem = {
 }
 
 type Pref = { length: LengthId; styles: StyleId[] }
+
+function loadQuality(): RecQuality {
+  try {
+    return localStorage.getItem('kaigimatomeru.quality.v1') === 'long' ? 'long' : 'wav'
+  } catch {
+    return 'wav'
+  }
+}
 
 function todayIso(): string {
   const now = new Date()
@@ -171,9 +186,14 @@ export function App() {
   const [date, setDate] = useState(todayIso)
   const [attendees, setAttendees] = useState('')
   const [transcript, setTranscript] = useState('')
-  const [interim, setInterim] = useState('')
-  const [phase, setPhase] = useState<RecorderPhase>('idle')
+  const [phase, setPhase] = useState<RecPhase>('idle')
   const [elapsed, setElapsed] = useState(0)
+  const [quality, setQuality] = useState<RecQuality>(loadQuality)
+  const [peaks, setPeaks] = useState<number[]>([])
+  const [bytes, setBytes] = useState(0)
+  const [marks, setMarks] = useState<RecMark[]>([])
+  const [skipSilence, setSkipSilence] = useState(false)
+  const [playMs, setPlayMs] = useState(0)
   const [recError, setRecError] = useState('')
   const [recNote, setRecNote] = useState('')
   const [audioUrl, setAudioUrl] = useState('')
@@ -187,11 +207,12 @@ export function App() {
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [roster, setRoster] = useState<Roster>(emptyRoster)
   const [dragging, setDragging] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
   const resultRef = useRef<HTMLElement>(null)
   const meterRef = useRef<HTMLSpanElement>(null)
-  const transcriptRef = useRef<HTMLTextAreaElement>(null)
-  const recorderRef = useRef<MeetingRecorder | null>(null)
+  const waveRef = useRef<HTMLCanvasElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const peaksRef = useRef<number[]>([])
+  const recorderRef = useRef<FieldRecorder | null>(null)
   const audioBlobRef = useRef<Blob | null>(null)
   const audioUrlRef = useRef('')
   const fileEarRef = useRef<FileEar | null>(null)
@@ -226,18 +247,7 @@ export function App() {
   }, [length, styles])
 
   useEffect(() => {
-    if (phase !== 'live') return
-    const area = transcriptRef.current
-    if (!area) return
-    area.scrollTop = area.scrollHeight
-  }, [phase, transcript, interim])
-
-  useEffect(() => {
-    const recorder = new MeetingRecorder({
-      onText: (committed, interimText) => {
-        setTranscript(committed)
-        setInterim(interimText)
-      },
+    const recorder = new FieldRecorder({
       onPhase: (next, seconds) => {
         setPhase(next)
         setElapsed(seconds)
@@ -245,6 +255,12 @@ export function App() {
       onLevel: (level) => {
         if (meterRef.current) meterRef.current.style.transform = `scaleX(${level.toFixed(3)})`
       },
+      onWave: (next, size) => {
+        peaksRef.current = next
+        setPeaks(next)
+        setBytes(size)
+      },
+      onMarks: (next) => setMarks(next),
       onNote: (note) => setRecNote(note),
       onAudio: (take) => {
         if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
@@ -259,6 +275,8 @@ export function App() {
         audioUrlRef.current = url
         setAudioUrl(url)
         setAudioExt(take.extension)
+        setTranscript('')
+        setPlayMs(0)
       },
     })
     recorderRef.current = recorder
@@ -267,6 +285,37 @@ export function App() {
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    const canvas = waveRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    const width = canvas.clientWidth || 320
+    const height = 72
+    canvas.width = Math.floor(width * dpr)
+    canvas.height = Math.floor(height * dpr)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.fillStyle = '#1b2838'
+    ctx.fillRect(0, 0, width, height)
+    const count = Math.max(peaks.length, 1)
+    const bar = width / count
+    ctx.fillStyle = '#f3c7b8'
+    peaks.forEach((peak, index) => {
+      const h = Math.max(2, peak * (height - 8))
+      ctx.fillRect(index * bar, (height - h) / 2, Math.max(1, bar - 0.5), h)
+    })
+    const duration = Math.max(peaks.length * 100, 1)
+    ctx.fillStyle = '#fff8f2'
+    marks.forEach((mark) => {
+      ctx.fillRect((mark.ms / duration) * width, 0, 2, height)
+    })
+    if (playMs > 0) {
+      ctx.fillStyle = '#9d2c1c'
+      ctx.fillRect((Math.min(playMs, duration) / duration) * width, 0, 2, height)
+    }
+  }, [peaks, marks, playMs])
 
   function remember(next: HistoryItem[]) {
     const trimmed = next.slice(0, 12)
@@ -284,18 +333,25 @@ export function App() {
     setNotice('')
     keepNames()
     const replacing = Boolean(audioBlobRef.current)
-    const error = (await recorderRef.current?.start(transcript)) ?? ''
+    if (recorderRef.current) recorderRef.current.quality = quality
+    const error = (await recorderRef.current?.start()) ?? ''
     if (error) {
       setRecError(error)
       return
     }
-    if (replacing) {
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
-      audioBlobRef.current = null
-      audioUrlRef.current = ''
-      setAudioUrl('')
-      setNotice('新しい録音を始めました。前の音声ファイルは置き換わりました。')
+    setDoc(null)
+    setTranscript('')
+    setPlayMs(0)
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    audioBlobRef.current = null
+    audioUrlRef.current = ''
+    setAudioUrl('')
+    try {
+      localStorage.setItem('kaigimatomeru.quality.v1', quality)
+    } catch {
+      /* 音質の記憶は次回に回す */
     }
+    if (replacing) setNotice('新しい録音を始めました。前の音声ファイルは置き換わりました。')
   }
 
   function pauseRecording() {
@@ -319,59 +375,33 @@ export function App() {
     else setNotice('音声ファイルを保存しました。')
   }
 
-  async function readFile(file: File) {
-    if (isAudioFile(file)) {
-      await readAudio(file)
-      return
-    }
-    let decoded = ''
-    try {
-      decoded = decodeTextFile(await file.arrayBuffer())
-    } catch {
-      setNotice('ファイルを読めませんでした。')
-      return
-    }
-    const text = transcriptFromFile(file.name, decoded)
-    if (!text.trim()) {
-      setNotice('読み取れる文字がありませんでした。テキスト、VTT、SRTを選んでください。')
-      return
-    }
-    setTranscript(text)
-    setNotice(
-      Array.from(decoded).length > 40000
-        ? '先頭の4万文字だけ読みました。'
-        : `${file.name} を原稿に入れました。`,
-    )
+  function addMark() {
+    recorderRef.current?.addMark()
   }
 
-  async function readAudio(file: File) {
-    if (phase === 'live' || hearing) {
-      setNotice(phase === 'live' ? '録音を止めてから、ファイルを開いてください。' : 'いま文字にしています。終わるまでお待ちください。')
+  async function readFile(file: File) {
+    if (phase === 'live' || phase === 'paused' || hearing) {
+      setNotice(phase === 'idle' ? 'いま文字にしています。終わるまでお待ちください。' : '録音を止めてから、ファイルを開いてください。')
       return
     }
-    if (transcript.trim() && !window.confirm('今の文字起こしを、この録音の文字に置き換えますか？')) return
-    setHearing(true)
-    setDoc(null)
-    setNotice('録音を読み込んでいます。音声はこの端末の外へ送りません。')
-    try {
-      const bytes = await file.arrayBuffer()
-      const pcm = await decodeTo16k(bytes)
-      const limited = limitPcm(pcm, 16000)
-      fileEarRef.current ??= new FileEar(setNotice)
-      const text = await fileEarRef.current.transcribe(limited.pcm)
-      if (!text) {
-        setNotice('声が聞き取れませんでした。mp3、m4a、wavでもう一度開いてください。')
-        return
-      }
-      setTranscript(text)
-      setSigned('')
-      const tail = limited.trimmed ? '先頭の45分まで文字にしました。' : '録音を文字にしました。'
-      setNotice(`${tail}この内容をまとめるを押すと、原稿になります。`)
-    } catch {
-      setNotice('この録音はブラウザが読めませんでした。mp3、m4a、wavにしてから開いてください。文字起こしの準備には通信を使いますが、会議の音声自体は送りません。')
-    } finally {
-      setHearing(false)
+    if (!isAudioFile(file)) {
+      setNotice('録音ファイルを選んでください。mp3、m4a、wavなどを開けます。')
+      return
     }
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    const url = URL.createObjectURL(file)
+    audioBlobRef.current = file
+    audioUrlRef.current = url
+    setAudioUrl(url)
+    setAudioExt(file.name.split('.').pop()?.toLowerCase() || 'wav')
+    setTranscript('')
+    setPeaks([])
+    peaksRef.current = []
+    setMarks([])
+    setBytes(file.size)
+    setPlayMs(0)
+    setDoc(null)
+    setNotice('録音を開きました。まとめ方を選んで、この録音をまとめるを押してください。')
   }
 
   function chooseStyle(id: StyleId) {
@@ -387,13 +417,38 @@ export function App() {
     })
   }
 
-  function runSummary() {
-    if (phase === 'live') return
+  async function runSummary() {
+    if (phase !== 'idle' || hearing) return
     keepNames()
-    const next = summarize({ text: transcript, title, date, attendees, length, style: styles[0], styles })
+    let text = transcript.trim()
+    let trimmed = false
+    if (!text && audioBlobRef.current) {
+      setHearing(true)
+      setDoc(null)
+      setNotice('録音を、この端末の中で文字にしてから、選んだ長さと形にします。')
+      try {
+        const pcm = await decodeTo16k(await audioBlobRef.current.arrayBuffer())
+        const limited = limitPcm(pcm, 16000)
+        fileEarRef.current ??= new FileEar(setNotice)
+        text = (await fileEarRef.current.transcribe(limited.pcm)).trim()
+        if (!text) {
+          setNotice('声が聞き取れませんでした。もう一度録音するか、別のファイルを開いてください。')
+          return
+        }
+        setTranscript(text)
+        trimmed = limited.trimmed
+      } catch {
+        setNotice('この録音はブラウザが読めませんでした。mp3、m4a、wavにしてから開いてください。文字にする準備には通信を使いますが、会議の音声自体は送りません。')
+        return
+      } finally {
+        setHearing(false)
+      }
+    }
+    if (!text) return
+    const next = summarize({ text, title, date, attendees, length, style: styles[0], styles })
     setDoc(next)
-    setSigned(signatureOf({ transcript, title, date, attendees, length, styles }))
-    setNotice(next.note)
+    setSigned(signatureOf({ transcript: text, title, date, attendees, length, styles }))
+    setNotice(trimmed ? `先頭の45分までをまとめました。${next.note}` : next.note)
     if (next.charCount > 0) {
       const item: HistoryItem = {
         id: `${Date.now()}`,
@@ -401,7 +456,7 @@ export function App() {
         title: title.trim(),
         date,
         attendees: attendees.trim(),
-        transcript: transcript.trim(),
+        transcript: text,
         length,
         style: styles[0],
         styles,
@@ -417,11 +472,21 @@ export function App() {
     }, 30)
   }
 
-  function clearTranscript() {
-    recorderRef.current?.clearText()
-    setTranscript('')
-    setInterim('')
-    setNotice('文字起こしを消しました。次の録音を始められます。')
+  function seekAudio(ms: number) {
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(audio.duration)) return
+    audio.currentTime = Math.min(audio.duration, Math.max(0, ms / 1000))
+    setPlayMs(audio.currentTime * 1000)
+  }
+
+  function followPlayback() {
+    const audio = audioRef.current
+    if (!audio) return
+    const at = audio.currentTime * 1000
+    setPlayMs(at)
+    if (!skipSilence || audio.paused) return
+    const jump = skipTo(peaksRef.current, at)
+    if (jump !== null && jump / 1000 < audio.duration) audio.currentTime = jump / 1000
   }
 
   async function sendToPc() {
@@ -449,9 +514,7 @@ export function App() {
 
   const currentSignature = signatureOf({ transcript, title, date, attendees, length, styles })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
-  const shownTranscript = phase === 'live' ? liveTranscript(transcript, interim) : transcript
-  const canSummarize = phase !== 'live' && !hearing && charCount(transcript) > 0
-  const canClear = phase !== 'live' && !hearing && charCount(shownTranscript) > 0
+  const canSummarize = phase === 'idle' && !hearing && (Boolean(audioUrl) || charCount(transcript) > 0)
 
   return (
     <>
@@ -460,13 +523,13 @@ export function App() {
           <p className="brand">会議まとめ</p>
           <h1>録音を、渡せる原稿に。</h1>
           <p className="lede">
-            長さと書き方を選ぶと、この端末の中だけでまとめます。会議の中身はサーバーへ送りません。
+            録音した音声を、選んだ長さと形の原稿にします。会議の中身はサーバーへ送りません。
           </p>
         </div>
       </header>
       <main className="desk">
         <section className="card source" aria-labelledby="source-heading">
-          <h2 id="source-heading">原稿</h2>
+          <h2 id="source-heading">録音</h2>
           <div className="meta">
             <div className="field">
               <label htmlFor="meeting-title">会議名</label>
@@ -564,86 +627,11 @@ export function App() {
               ) : null}
             </div>
           </div>
-          <div className="tools">
-            {phase === 'idle' ? (
-              <button type="button" className="record" disabled={hearing} onClick={() => void startRecording()} aria-pressed="false">
-                <span className="dot" aria-hidden="true" />
-                録音する
-              </button>
-            ) : (
-              <>
-                <button type="button" className="record is-on" onClick={() => void stopRecording()} aria-pressed="true">
-                  <span className="dot" aria-hidden="true" />
-                  停止 {formatClock(elapsed)}
-                </button>
-                {phase === 'paused' ? (
-                  <button type="button" onClick={resumeRecording}>
-                    続ける
-                  </button>
-                ) : (
-                  <button type="button" onClick={pauseRecording}>
-                    一時停止
-                  </button>
-                )}
-              </>
-            )}
-            <button type="button" className="ghost" disabled={hearing || phase !== 'idle'} onClick={() => audioFileRef.current?.click()}>
-              録音ファイルを開く
-            </button>
-            <button type="button" className="ghost" disabled={hearing || phase !== 'idle'} onClick={() => fileRef.current?.click()}>
-              文字ファイルを開く
-            </button>
-            <input
-              ref={audioFileRef}
-              className="file"
-              type="file"
-              accept="audio/*,video/*,.mp3,.m4a,.wav,.aac,.mp4,.ogg,.webm,.flac,.3gp,.caf,.amr,.wma,.m4b"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (file) void readFile(file)
-              }}
-            />
-            <input
-              ref={fileRef}
-              className="file"
-              type="file"
-              accept=".txt,.md,.vtt,.srt,.csv,text/plain"
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (file) void readFile(file)
-              }}
-            />
-          </div>
-          {phase !== 'idle' ? (
-            <div className="meter" aria-hidden="true">
-              <span ref={meterRef} />
-            </div>
-          ) : null}
-          {recNote ? <p className="rec-status">{recNote}</p> : null}
-          {audioUrl ? (
-            <div className="take noprint">
-              <audio controls src={audioUrl} preload="metadata" />
-              <button type="button" onClick={() => void saveAudio()}>
-                音声を保存
-              </button>
-            </div>
-          ) : null}
-          <p className="fine">
-            自分の声は録音を始めるとすぐに欄へ出ます。拾えなかった音は、精度の高いモデルで少し遅れて足します。初回の準備は通信を使います。会議の音声自体は送りません。
-          </p>
-          {micBlock ? <p className="alert">{micBlock}</p> : null}
-          {recError ? (
-            <p className="alert" role="alert">
-              {recError}
-            </p>
-          ) : null}
           <div
-            className={dragging ? 'editor is-drag' : phase === 'live' ? 'editor is-live' : 'editor'}
+            className={dragging ? 'studio is-drag' : 'studio'}
             onDragOver={(event) => {
               event.preventDefault()
-              setDragging(true)
+              if (phase === 'idle' && !hearing) setDragging(true)
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={(event) => {
@@ -653,26 +641,132 @@ export function App() {
               if (file) void readFile(file)
             }}
           >
-            <label className="editor-label" htmlFor="transcript">
-              文字起こし
-              <span>{charCount(shownTranscript).toLocaleString('ja-JP')}文字</span>
-            </label>
-            <textarea
-              id="transcript"
-              ref={transcriptRef}
-              value={shownTranscript}
-              readOnly={phase !== 'idle' || hearing}
-              placeholder="ここに話した内容を貼り付けるか、録音を始めるか、録音ファイルを開いてください。"
-              onChange={(event) => setTranscript(event.target.value)}
-              onKeyDown={(event) => {
-                if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && canSummarize) runSummary()
-              }}
-            />
             <div className="tools">
-              <button type="button" disabled={!canClear} onClick={clearTranscript}>
-                文字起こしを消す
+              {phase === 'idle' ? (
+                <button type="button" className="record" disabled={hearing} onClick={() => void startRecording()} aria-pressed="false">
+                  <span className="dot" aria-hidden="true" />
+                  録音する
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="record is-on" onClick={() => void stopRecording()} aria-pressed="true">
+                    <span className="dot" aria-hidden="true" />
+                    停止 {formatClock(elapsed)}
+                  </button>
+                  {phase === 'paused' ? (
+                    <button type="button" onClick={resumeRecording}>
+                      続ける
+                    </button>
+                  ) : (
+                    <button type="button" onClick={pauseRecording}>
+                      一時停止
+                    </button>
+                  )}
+                  <button type="button" onClick={addMark}>
+                    印
+                  </button>
+                </>
+              )}
+              <button type="button" className="ghost" disabled={hearing || phase !== 'idle'} onClick={() => audioFileRef.current?.click()}>
+                録音ファイルを開く
               </button>
+              <input
+                ref={audioFileRef}
+                className="file"
+                type="file"
+                accept="audio/*,video/*,.mp3,.m4a,.wav,.aac,.mp4,.ogg,.webm,.flac,.3gp,.caf,.amr,.wma,.m4b"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void readFile(file)
+                }}
+              />
             </div>
+            {phase === 'idle' ? (
+              <div className="picks" role="group" aria-label="音質">
+                <button type="button" className={quality === 'wav' ? 'is-on' : ''} onClick={() => setQuality('wav')}>
+                  高音質
+                </button>
+                <button type="button" className={quality === 'long' ? 'is-on' : ''} onClick={() => setQuality('long')}>
+                  長時間
+                </button>
+              </div>
+            ) : null}
+            {peaks.length > 0 ? (
+              <canvas
+                ref={waveRef}
+                className="wave"
+                aria-label="録音の波形"
+                onClick={(event) => {
+                  const width = event.currentTarget.clientWidth
+                  const audio = audioRef.current
+                  if (!audio || !width || !Number.isFinite(audio.duration)) return
+                  seekAudio((event.nativeEvent.offsetX / width) * audio.duration * 1000)
+                }}
+              />
+            ) : null}
+            {phase !== 'idle' ? (
+              <div className="meter" aria-hidden="true">
+                <span ref={meterRef} />
+              </div>
+            ) : null}
+            {bytes > 0 ? (
+              <p className="fine">
+                {quality === 'wav' && phase !== 'idle' ? '高音質 WAV' : audioExt.toUpperCase()}　{formatBytes(bytes)}
+                {phase !== 'idle' ? `　${formatClock(elapsed)}` : ''}
+              </p>
+            ) : null}
+            {recNote ? <p className="rec-status">{recNote}</p> : null}
+            {audioUrl ? (
+              <div className="take noprint">
+                <audio
+                  ref={audioRef}
+                  controls
+                  src={audioUrl}
+                  preload="metadata"
+                  onTimeUpdate={followPlayback}
+                />
+                {peaks.length > 0 ? (
+                  <label className="skip">
+                    <input type="checkbox" checked={skipSilence} onChange={(event) => setSkipSilence(event.target.checked)} />
+                    無音を飛ばして再生
+                  </label>
+                ) : null}
+                <button type="button" onClick={() => void saveAudio()}>
+                  音声を保存
+                </button>
+                {marks.length > 0 ? (
+                  <div className="marks">
+                    {marks.map((mark) => (
+                      <label key={mark.id}>
+                        <button type="button" onClick={() => seekAudio(mark.ms)}>
+                          {formatClock(mark.ms / 1000)}
+                        </button>
+                        <input
+                          value={mark.label}
+                          maxLength={40}
+                          aria-label={`${formatClock(mark.ms / 1000)}の印`}
+                          onChange={(event) =>
+                            setMarks((current) =>
+                              current.map((item) => (item.id === mark.id ? { ...item, label: event.target.value } : item)),
+                            )
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <p className="fine">
+              高音質は48kHz・16bitのWAVで、1分あたり約6MBです。長時間は容量を抑えます。まとめるときだけ、この端末の中で文字にしてから、選んだ長さと形にします。初回の準備は通信を使います。会議の音声自体は送りません。
+            </p>
+            {micBlock ? <p className="alert">{micBlock}</p> : null}
+            {recError ? (
+              <p className="alert" role="alert">
+                {recError}
+              </p>
+            ) : null}
           </div>
         </section>
 
@@ -722,8 +816,8 @@ export function App() {
               </fieldset>
             )
           })}
-          <button type="button" className="summarize" disabled={!canSummarize} onClick={runSummary}>
-            {hearing ? '録音を文字にしています' : phase === 'live' ? '録音を止めてからまとめます' : 'この内容をまとめる'}
+          <button type="button" className="summarize" disabled={!canSummarize} onClick={() => void runSummary()}>
+            {hearing ? '録音を文字にしています' : phase !== 'idle' ? '録音を止めてからまとめます' : 'この録音をまとめる'}
           </button>
         </section>
 

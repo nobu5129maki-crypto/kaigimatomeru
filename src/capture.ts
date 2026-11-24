@@ -18,12 +18,12 @@ type Listener = {
 type WakeLock = { release: () => Promise<void> }
 
 export function recordingBlock(): string {
-  if (typeof navigator === 'undefined') return 'このブラウザはマイク録音に対応していません。文字を貼り付けてください。'
+    if (typeof navigator === 'undefined') return 'このブラウザはマイク録音に対応していません。'
   if (!navigator.mediaDevices?.getUserMedia) {
     if (typeof window !== 'undefined' && window.isSecureContext === false) {
       return 'このページは保護されていないため、ブラウザがマイクを渡しません。httpsのアドレスで開くと録音できます。'
     }
-    return 'このブラウザはマイク録音に対応していません。文字を貼り付けてください。'
+    return 'このブラウザはマイク録音に対応していません。'
   }
   return ''
 }
