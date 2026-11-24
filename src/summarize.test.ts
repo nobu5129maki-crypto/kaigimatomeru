@@ -14,7 +14,7 @@ import {
   type StyleId,
 } from './summarize'
 
-const lengths = Object.keys(LENGTHS) as LengthId[]
+const lengths = (Object.keys(LENGTHS) as LengthId[]).filter((id) => id !== 'point')
 const styles = Object.keys(STYLES) as StyleId[]
 const headings = new Set([
   '',
@@ -289,6 +289,42 @@ describe('まとめ', () => {
     expect(doc.blocks.some((block) => block.heading.includes('箇条書き'))).toBe(true)
     expect(doc.blocks.some((block) => block.heading.includes('やること'))).toBe(true)
     expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+  })
+
+  it('長さ、形、文章の調子、記録の型を一つの原稿にまとめる', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c800',
+      style: 'bullets',
+      styles: ['bullets', 'news', 'minutes'],
+    })
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+    expect(doc.charCount).toBeGreaterThan(0)
+    expect(doc.blocks.some((block) => block.heading.includes('箇条書き'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('新聞記事'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('議事録'))).toBe(true)
+    expect(doc.plain).toContain('980')
+  })
+
+  it('要点の長さでも、選んだ形と調子を同じ原稿に入れる', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'point',
+      style: 'bullets',
+      styles: ['bullets', 'news'],
+    })
+    expect(doc.lengthLabel).toBe('要は、何が言いたい？')
+    expect(doc.charCount).toBeLessThanOrEqual(doc.max)
+    expect(doc.blocks.some((block) => block.heading.includes('箇条書き'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('新聞記事'))).toBe(true)
+    expect(doc.blocks.some((block) => block.heading.includes('要は、何が言いたい？'))).toBe(true)
+    expect(doc.plain).toContain('980')
   })
 
   it('要は何が言いたいは、長い答えだけを箇条書きにする', () => {

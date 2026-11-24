@@ -1,4 +1,4 @@
-export type LengthId = 'c100' | 'c200' | 'c400' | 'c800' | 'a4' | 'c2000' | 'c4000'
+export type LengthId = 'c100' | 'c200' | 'c400' | 'c800' | 'a4' | 'c2000' | 'c4000' | 'point'
 export type StyleId =
   | 'titled'
   | 'bullets'
@@ -29,10 +29,10 @@ export const LENGTHS: Record<
   a4: { label: 'A4用紙一枚', hint: '印刷すると1枚に収まる長さ', target: 1050, min: 820, max: 1200 },
   c2000: { label: '2,000文字程度', hint: '1時間を、読んで渡せる長さ', target: 2000, min: 1600, max: 2400 },
   c4000: { label: '4,000文字程度', hint: '論点まで残す詳しい記録', target: 4000, min: 3200, max: 4800 },
+  point: { label: '要は、何が言いたい？', hint: '言いたいことを短く箇条書きにします', target: 160, min: 1, max: 260 },
 }
 
 export const STYLE_GROUPS: { id: StyleGroup; label: string }[] = [
-  { id: 'live', label: '要点' },
   { id: 'shape', label: '形' },
   { id: 'voice', label: '文章の調子' },
   { id: 'record', label: '記録の型' },
@@ -128,10 +128,12 @@ function normalizeStyles(styles: StyleId[] | undefined, fallback: StyleId): Styl
 }
 
 export function summarize(input: SummarizeInput & { styles?: StyleId[] }): SummaryResult {
-  const chosen = normalizeStyles(input.styles, input.style)
-  const shapes = chosen.filter((id) => STYLES[id].group === 'shape')
-  if (shapes.length > 1 && shapes.length === chosen.length) return summarizeShapes(input, shapes)
-  return summarizeSingle({ ...input, style: chosen[0] })
+  const chosen = normalizeStyles(input.styles, input.style).filter((id, index, all) => all.indexOf(id) === index)
+  const withPoint =
+    input.length === 'point' && !chosen.includes('point') ? orderStyles([...chosen, 'point']) : chosen
+  if (withPoint.length > 1) return summarizeShapes(input, withPoint)
+  if (withPoint[0] === 'point' || input.length === 'point') return summarizePoint(input)
+  return summarizeSingle({ ...input, style: withPoint[0] })
 }
 
 function summarizeSingle(input: SummarizeInput): SummaryResult {
@@ -231,9 +233,12 @@ function summarizeShapes(input: SummarizeInput, shapes: StyleId[]): SummaryResul
     min: length.min,
     max: length.max,
     note,
-    style: shapes[0],
+    style: shapes[0] === 'point' && shapes.length > 1 ? shapes.find((id) => id !== 'point') ?? 'point' : shapes[0],
     length: input.length,
-    styleLabel: shapes.map((id) => STYLES[id].label).join('、'),
+    styleLabel: shapes
+      .filter((id) => !(input.length === 'point' && id === 'point'))
+      .map((id) => STYLES[id].label)
+      .join('、') || STYLES.point.label,
     lengthLabel: length.label,
   }
 }
@@ -298,17 +303,18 @@ function summarizePoint(input: SummarizeInput): SummaryResult {
   const spoken = scoreUnits(pointSentences(turn.body), 'point')
   const kept = spoken.filter((unit) => !isFiller(unit.text))
   const units = kept.length > 0 ? kept : spoken
+  const length = input.length === 'point' ? LENGTHS.point : null
   const base = {
     title: title || (turn.speaker ? `${turn.speaker}の話` : 'インタビュー'),
     dateline,
     attendees,
-    target: 160,
-    min: 1,
-    max: 260,
+    target: length?.target ?? 160,
+    min: length?.min ?? 1,
+    max: length?.max ?? 260,
     style: 'point' as const,
     length: input.length,
     styleLabel: STYLES.point.label,
-    lengthLabel: '要点だけ',
+    lengthLabel: length?.label ?? '要点だけ',
   }
   if (units.length === 0) {
     return {
