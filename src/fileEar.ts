@@ -49,7 +49,11 @@ export async function decodeTo16k(buffer: ArrayBuffer): Promise<Float32Array> {
 }
 
 type HearResult = { type: 'text'; id: number; text: string; final: boolean }
-type EarEvent = { type: 'progress'; progress: number } | { type: 'ready' } | HearResult | { type: 'error' }
+type EarEvent =
+  | { type: 'progress'; progress: number; stage?: string }
+  | { type: 'ready' }
+  | HearResult
+  | { type: 'error' }
 
 export class FileEar {
   private worker: Worker | null = null
@@ -65,7 +69,7 @@ export class FileEar {
     if (slices.length === 0) return ''
     let text = ''
     for (let index = 0; index < slices.length; index += 1) {
-      this.onStatus(`文字にしています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`)
+      this.onStatus(`原稿を書いています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`)
       const heard = cleanHeard(await this.hear(normalizeUtterance(slices[index])))
       if (heard) text = appendRecognized(text, heard)
     }
@@ -84,7 +88,11 @@ export class FileEar {
     if (!data || typeof data !== 'object') return
     if (data.type === 'progress') {
       if (this.ready) return
-      this.onStatus(`文字起こしの準備をしています（${Math.round(data.progress)}%）。`)
+      if (data.stage === 'boot' || data.progress >= 100) {
+        this.onStatus('モデルを起動しています。起動すると原稿を書きます。')
+        return
+      }
+      this.onStatus(`まとめの準備をしています（${Math.round(data.progress)}%）。`)
       return
     }
     if (data.type === 'ready') {
@@ -108,7 +116,7 @@ export class FileEar {
       const timer = window.setTimeout(() => {
         this.pending.delete(id)
         reject(new Error('timeout'))
-      }, 180000)
+      }, 240000)
       this.pending.set(id, {
         resolve: (text) => {
           window.clearTimeout(timer)
@@ -119,8 +127,15 @@ export class FileEar {
           reject(error)
         },
       })
-      this.worker?.postMessage({ type: 'hear', id, pcm: copy, final: true, beams: 2 })
+      this.worker?.postMessage({ type: 'hear', id, pcm: copy, final: true, beams: 1 })
     })
+  }
+
+  close(): void {
+    this.worker?.terminate()
+    this.worker = null
+    this.ready = false
+    this.fail(new Error('closed'))
   }
 
   private fail(error: Error): void {

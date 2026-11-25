@@ -328,6 +328,11 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   color: var(--muted);
   line-height: 1.7;
 }
+.empty.working {
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--line);
+}
 .empty p { margin: 0 0 6px; }
 .actions {
   display: flex;

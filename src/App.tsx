@@ -449,6 +449,13 @@ export function App() {
     return { length, styles: body.length ? body : ['memo'] }
   }
 
+  function showResult() {
+    window.setTimeout(() => {
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      resultRef.current?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+    }, 60)
+  }
+
   async function runSummary() {
     if (phase !== 'idle' || hearing) return
     keepNames()
@@ -457,13 +464,18 @@ export function App() {
     if (!text && audioBlobRef.current) {
       setHearing(true)
       setDoc(null)
-      setNotice('選んだ長さ、形、調子でまとめています。')
+      setNotice('原稿を書いています。')
+      showResult()
+      let limited: { pcm: Float32Array; trimmed: boolean }
       try {
         const pcm = await decodeTo16k(await audioBlobRef.current.arrayBuffer())
-        const limited = limitPcm(pcm, 16000)
-        fileEarRef.current ??= new FileEar((note) => {
-          setNotice(note.includes('準備') ? note.replace('文字起こし', 'まとめ') : '選んだ長さ、形、調子でまとめています。')
-        })
+        limited = limitPcm(pcm, 16000)
+      } catch {
+        setNotice('この録音はブラウザが読めませんでした。mp3、m4a、wavにしてから開いてください。')
+        return
+      }
+      try {
+        fileEarRef.current ??= new FileEar((note) => setNotice(note))
         text = (await fileEarRef.current.transcribe(limited.pcm)).trim()
         if (!text) {
           setNotice('声が聞き取れませんでした。もう一度録音するか、別のファイルを開いてください。')
@@ -471,8 +483,15 @@ export function App() {
         }
         setTranscript(text)
         trimmed = limited.trimmed
-      } catch {
-        setNotice('この録音はブラウザが読めませんでした。mp3、m4a、wavにしてから開いてください。まとめの準備には通信を使いますが、会議の音声自体は送りません。')
+      } catch (error) {
+        fileEarRef.current?.close()
+        fileEarRef.current = null
+        const timedOut = error instanceof Error && error.message === 'timeout'
+        setNotice(
+          timedOut
+            ? 'まとめが時間内に終わりませんでした。短い録音でもう一度試してください。会議の音声自体は送りません。'
+            : '原稿を書けませんでした。通信できる状態でもう一度まとめるを押してください。会議の音声自体は送りません。',
+        )
         return
       } finally {
         setHearing(false)
@@ -492,6 +511,7 @@ export function App() {
     setDoc(next)
     setSigned(signatureOf({ transcript: text, title, date, attendees, length: picked.length, styles: picked.styles }))
     setNotice(trimmed ? `先頭の45分までをまとめました。${next.note}` : next.note)
+    showResult()
     if (next.charCount > 0) {
       const item: HistoryItem = {
         id: `${Date.now()}`,
@@ -512,10 +532,6 @@ export function App() {
       )
       remember([item, ...prev])
     }
-    window.setTimeout(() => {
-      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      resultRef.current?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-    }, 30)
   }
 
   function seekAudio(ms: number) {
@@ -887,8 +903,13 @@ export function App() {
 
         <section className="result" ref={resultRef} aria-live="polite">
           {dirty ? <p className="alert">原稿か条件が変わっています。もう一度まとめると、表示が新しい内容になります。</p> : null}
-          {notice ? <p className="notice">{notice}</p> : null}
-          {doc && doc.charCount > 0 ? (
+          {notice && !hearing ? <p className="notice">{notice}</p> : null}
+          {hearing ? (
+            <div className="empty working" role="status">
+              <p>原稿を書いています。</p>
+              <p>{notice || '選んだ長さ、形、調子で、この端末の中でまとめています。'}</p>
+            </div>
+          ) : doc && doc.charCount > 0 ? (
             <>
               <article className={length === 'a4' ? 'paper sheet' : 'paper'} aria-label="まとめ原稿">
                 <p className="kicker">{doc.styleLabel}</p>

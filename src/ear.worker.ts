@@ -23,8 +23,13 @@ const scope = globalThis as unknown as {
 }
 
 function reportProgress(update: { status?: string; progress?: number }): void {
+  if (update.status === 'done') {
+    scope.postMessage({ type: 'progress', progress: 100, stage: 'boot' })
+    return
+  }
   if (update.status !== 'progress' || typeof update.progress !== 'number') return
-  scope.postMessage({ type: 'progress', progress: Math.max(0, Math.min(100, update.progress)) })
+  const progress = Math.max(0, Math.min(100, update.progress))
+  scope.postMessage({ type: 'progress', progress, stage: progress >= 100 ? 'boot' : 'download' })
 }
 
 async function loadModel(model: string): Promise<Transcriber> {
@@ -39,6 +44,7 @@ async function loadModel(model: string): Promise<Transcriber> {
 function warm(): Promise<void> {
   if (transcriber) return Promise.resolve()
   if (warming) return warming
+  // 話した言葉が残る small を使う。1区切りに時間がかかるので、画面側は待ち時間を原稿欄に出す。
   warming = (async () => {
     try {
       transcriber = await loadModel('Xenova/whisper-small')
