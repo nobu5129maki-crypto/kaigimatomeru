@@ -48,6 +48,22 @@ export async function decodeTo16k(buffer: ArrayBuffer): Promise<Float32Array> {
   }
 }
 
+export type EarProgress = { note: string; ratio: number; cap: number }
+
+export function meterSpan(kind: 'download' | 'boot' | 'chunk', value: number, total = 1): Pick<EarProgress, 'ratio' | 'cap'> {
+  if (kind === 'boot') return { ratio: 0.36, cap: 0.42 }
+  if (kind === 'download') {
+    const ratio = 0.05 + Math.max(0, Math.min(1, value)) * 0.3
+    return { ratio, cap: Math.min(0.4, ratio + 0.04) }
+  }
+  const count = Math.max(1, total)
+  const index = Math.min(count - 1, Math.max(0, value))
+  return {
+    ratio: 0.42 + (index / count) * 0.53,
+    cap: 0.42 + ((index + 1) / count) * 0.53 - 0.01,
+  }
+}
+
 type HearResult = { type: 'text'; id: number; text: string; final: boolean }
 type EarEvent =
   | { type: 'progress'; progress: number; stage?: string }
@@ -60,8 +76,10 @@ export class FileEar {
   private pending = new Map<number, { resolve: (text: string) => void; reject: (error: Error) => void }>()
   private seq = 0
   private ready = false
+  private booting = false
+  private writing = false
 
-  constructor(private onStatus: (note: string) => void) {}
+  constructor(private onStatus: (update: EarProgress) => void) {}
 
   async transcribe(pcm: Float32Array): Promise<string> {
     this.ensure()
@@ -69,7 +87,12 @@ export class FileEar {
     if (slices.length === 0) return ''
     let text = ''
     for (let index = 0; index < slices.length; index += 1) {
-      this.onStatus(`原稿を書いています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`)
+      this.writing = true
+      const span = meterSpan('chunk', index, slices.length)
+      this.onStatus({
+        note: `原稿を書いています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`,
+        ...span,
+      })
       const heard = cleanHeard(await this.hear(normalizeUtterance(slices[index])))
       if (heard) text = appendRecognized(text, heard)
     }
@@ -87,12 +110,13 @@ export class FileEar {
   private onWorker(data: EarEvent): void {
     if (!data || typeof data !== 'object') return
     if (data.type === 'progress') {
-      if (this.ready) return
-      if (data.stage === 'boot' || data.progress >= 100) {
-        this.onStatus('モデルを起動しています。起動すると原稿を書きます。')
+      if (this.ready || this.writing) return
+      if (data.stage === 'boot' || data.progress >= 100) this.booting = true
+      if (this.booting) {
+        this.onStatus({ note: 'モデルを起動しています。起動すると原稿を書きます。', ...meterSpan('boot', 1) })
         return
       }
-      this.onStatus(`まとめの準備をしています（${Math.round(data.progress)}%）。`)
+      this.onStatus({ note: 'まとめの準備をしています。', ...meterSpan('download', data.progress / 100) })
       return
     }
     if (data.type === 'ready') {
@@ -135,6 +159,8 @@ export class FileEar {
     this.worker?.terminate()
     this.worker = null
     this.ready = false
+    this.booting = false
+    this.writing = false
     this.fail(new Error('closed'))
   }
 

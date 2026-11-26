@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAudioFile, limitPcm, mixDown, slicePcm } from './fileEar'
+import { isAudioFile, limitPcm, meterSpan, mixDown, slicePcm } from './fileEar'
 
 describe('録音ファイル', () => {
   it('ボイスレコーダーの形式を音声として扱う', () => {
@@ -24,6 +24,21 @@ describe('録音ファイル', () => {
     expect(parts).toHaveLength(2)
     expect(parts[0]).toHaveLength(32000)
     expect(parts[1]).toHaveLength(16000)
+  })
+
+  it('バロメーターは準備で止まらず、区切りが進むと伸びる', () => {
+    const start = meterSpan('download', 0)
+    const ready = meterSpan('download', 1)
+    const boot = meterSpan('boot', 1)
+    const first = meterSpan('chunk', 0, 2)
+    const second = meterSpan('chunk', 1, 2)
+    expect(start.ratio).toBeLessThan(ready.ratio)
+    expect(ready.cap).toBeLessThan(0.5)
+    expect(boot.ratio).toBeGreaterThan(ready.ratio)
+    expect(first.ratio).toBeGreaterThanOrEqual(boot.cap)
+    expect(second.ratio).toBeGreaterThan(first.ratio)
+    expect(second.cap).toBeGreaterThan(second.ratio)
+    expect(second.cap).toBeLessThan(1)
   })
 
   it('長すぎる録音は先頭だけ残す', () => {

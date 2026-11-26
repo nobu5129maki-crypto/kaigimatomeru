@@ -217,6 +217,7 @@ export function App() {
   const [length, setLength] = useState<LengthId>(pref.current.length)
   const [styles, setStyles] = useState<StyleId[]>(pref.current.styles)
   const [hearing, setHearing] = useState(false)
+  const [bar, setBar] = useState(0)
   const [doc, setDoc] = useState<SummaryResult | null>(null)
   const [signed, setSigned] = useState('')
   const [notice, setNotice] = useState('')
@@ -232,6 +233,7 @@ export function App() {
   const audioBlobRef = useRef<Blob | null>(null)
   const audioUrlRef = useRef('')
   const fileEarRef = useRef<FileEar | null>(null)
+  const barCapRef = useRef(8)
   const audioFileRef = useRef<HTMLInputElement>(null)
 
   const micBlock = recordingBlock()
@@ -449,6 +451,20 @@ export function App() {
     return { length, styles: body.length ? body : ['memo'] }
   }
 
+  useEffect(() => {
+    if (!hearing) return
+    const timer = window.setInterval(() => {
+      setBar((current) => {
+        const cap = barCapRef.current
+        if (current >= cap) return current
+        const gap = cap - current
+        const step = gap > 8 ? 0.45 : 0.15
+        return Math.min(cap, current + step)
+      })
+    }, 400)
+    return () => window.clearInterval(timer)
+  }, [hearing])
+
   function showResult() {
     window.setTimeout(() => {
       const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -464,6 +480,8 @@ export function App() {
     if (!text && audioBlobRef.current) {
       setHearing(true)
       setDoc(null)
+      setBar(3)
+      barCapRef.current = 8
       setNotice('原稿を書いています。')
       showResult()
       let limited: { pcm: Float32Array; trimmed: boolean }
@@ -475,7 +493,11 @@ export function App() {
         return
       }
       try {
-        fileEarRef.current ??= new FileEar((note) => setNotice(note))
+        fileEarRef.current ??= new FileEar((update) => {
+          setNotice(update.note)
+          barCapRef.current = Math.max(barCapRef.current, update.cap * 100)
+          setBar((current) => Math.max(current, update.ratio * 100))
+        })
         text = (await fileEarRef.current.transcribe(limited.pcm)).trim()
         if (!text) {
           setNotice('声が聞き取れませんでした。もう一度録音するか、別のファイルを開いてください。')
@@ -495,6 +517,8 @@ export function App() {
         return
       } finally {
         setHearing(false)
+        setBar(0)
+        barCapRef.current = 8
       }
     }
     if (!text) return
@@ -905,9 +929,24 @@ export function App() {
           {dirty ? <p className="alert">原稿か条件が変わっています。もう一度まとめると、表示が新しい内容になります。</p> : null}
           {notice && !hearing ? <p className="notice">{notice}</p> : null}
           {hearing ? (
-            <div className="empty working" role="status">
+            <div className="empty working">
               <p>原稿を書いています。</p>
-              <p>{notice || '選んだ長さ、形、調子で、この端末の中でまとめています。'}</p>
+              <div className="barometer">
+                <div className="barometer-label">
+                  <span>{notice || '選んだ長さ、形、調子で、この端末の中でまとめています。'}</span>
+                  <strong>{Math.round(bar)}%</strong>
+                </div>
+                <div
+                  className="barometer-track"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(bar)}
+                  aria-label="まとめの進み具合"
+                >
+                  <span style={{ width: `${Math.round(bar)}%` }} />
+                </div>
+              </div>
             </div>
           ) : doc && doc.charCount > 0 ? (
             <>
