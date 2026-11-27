@@ -47,6 +47,11 @@ const headings = new Set([
   'どのように',
   '誰が',
   '言いたいこと',
+  '見出しの候補',
+  '分かっていること',
+  'はじめに',
+  '次に',
+  'そのあと',
 ])
 
 function digitsOf(text: string): string[] {
@@ -242,6 +247,63 @@ describe('まとめ', () => {
     expect(doc.blocks.some((block) => block.list)).toBe(true)
     expect(documentText(doc)).toContain('・')
     expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
+  })
+
+  it('見出しをつけるはタイトルを決め、候補を3つ出す', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'titled',
+    })
+    const candidates = doc.blocks.find((block) => block.heading === '見出しの候補')
+    expect(candidates?.list).toBe(true)
+    expect(candidates?.lines).toHaveLength(3)
+    expect(candidates?.lines[0]).toBe(doc.headline)
+    expect(doc.blocks.some((block) => block.heading === '決まったこと')).toBe(true)
+    for (const line of candidates?.lines ?? []) expect(SAMPLE_TRANSCRIPT).toContain(line)
+    for (const block of doc.blocks) {
+      for (const line of block.lines) expect(line.includes('：')).toBe(false)
+    }
+  })
+
+  it('形は話した文の写しではなく、その形の項目になる', () => {
+    const expectShape = (style: StyleId, heading: string) => {
+      const doc = summarize({
+        text: SAMPLE_TRANSCRIPT,
+        title: SAMPLE_TITLE,
+        date: SAMPLE_DATE,
+        attendees: SAMPLE_ATTENDEES,
+        length: 'c400',
+        style,
+      })
+      expect(doc.blocks.some((block) => block.heading === heading), style).toBe(true)
+      if (style !== 'todo') expect(doc.plain, style).toContain('980')
+      for (const block of doc.blocks) {
+        for (const line of block.lines) expect(line.includes('：'), `${style} ${line}`).toBe(false)
+      }
+    }
+    expectShape('bullets', '要点')
+    expectShape('lead', '結論')
+    expectShape('timeline', 'はじめに')
+    expectShape('contrast', 'まとまったこと')
+    expectShape('todo', 'やること')
+    expectShape('flash', '分かっていること')
+    expectShape('fivew', '何を')
+    expectShape('report', '要旨')
+    const listed = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'titledList',
+    })
+    expect(listed.headline.length).toBeGreaterThan(0)
+    expect(listed.blocks.some((block) => block.list)).toBe(true)
+    expect(SAMPLE_TRANSCRIPT).toContain(listed.headline)
   })
 
   it('箇条書きは項目だけで並べる', () => {

@@ -39,7 +39,7 @@ export const STYLE_GROUPS: { id: StyleGroup; label: string }[] = [
 ]
 
 export const STYLES: Record<StyleId, { label: string; hint: string; group: StyleGroup }> = {
-  titled: { label: '見出しをつける', hint: '内容を一文で言い切る見出しを立てます', group: 'shape' },
+  titled: { label: '見出しをつける', hint: 'タイトルをつけ、候補を3つ出します', group: 'shape' },
   bullets: { label: '箇条書き', hint: '一つのことずつ、行を分けます', group: 'shape' },
   titledList: { label: '見出しと箇条書き', hint: '見出しの下を、項目だけで読みます', group: 'shape' },
   lead: { label: '結論からはじめる', hint: '最初に決まったこと、あとから経緯です', group: 'shape' },
@@ -210,9 +210,10 @@ function summarizeShapes(input: SummarizeInput, shapes: StyleId[]): SummaryResul
     }
     fitted.blocks.forEach((block, index) => {
       const label = STYLES[style].label
+      const own = block.heading && block.heading !== label ? `${label}　${block.heading}` : label
       blocks.push({
         ...block,
-        heading: index === 0 ? (block.heading ? `${label}　${block.heading}` : label) : block.heading,
+        heading: index === 0 ? own : block.heading,
       })
     })
   }
@@ -530,7 +531,7 @@ function render(
   if (style === 'titled') return finish(renderTitled(units))
   if (style === 'news') return finish(renderNews(units))
   if (style === 'bullets') return finish(renderBullets(units, ''))
-  if (style === 'titledList') return finish(renderBullets(units, headlineOf(units)))
+  if (style === 'titledList') return finish(renderBullets(units, titleCandidates(units)[0] || headlineOf(units)))
   if (style === 'flash') return finish(renderFlash(units))
   if (style === 'lead') return finish(renderLead(units))
   if (style === 'timeline') return finish(renderTimeline(units))
@@ -555,21 +556,23 @@ function finish(body: { headline: string; blocks: SummaryBlock[] }): {
   return { ...body, plain, charCount: charCount(plain) }
 }
 
-function linesOf(units: Unit[]): string[] {
-  return units.map((unit) => ensurePeriod(unit.text))
-}
-
 function headlineOf(units: Unit[]): string {
   const best = pickHeadlineSource(units)
   return best ? headlineFrom(best.text) : '会議のまとめ'
 }
 
 function renderTitled(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const ordered = [...units].sort((a, b) => a.index - b.index)
-  return {
-    headline: headlineOf(units),
-    blocks: ordered.length ? [{ heading: '', lines: linesOf(ordered) }] : [],
-  }
+  const candidates = titleCandidates(units)
+  const blocks: SummaryBlock[] = []
+  if (candidates.length > 0) blocks.push({ heading: '見出しの候補', lines: candidates, list: true })
+  blocks.push(...kindBlocks(units, [
+    ['decision', '決まったこと'],
+    ['action', 'このあと'],
+    ['issue', '残っていること'],
+    ['schedule', 'いつ'],
+    ['fact', '分かっていること'],
+  ]))
+  return { headline: candidates[0] || headlineOf(units), blocks }
 }
 
 function renderPoint(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
@@ -582,102 +585,199 @@ function renderPoint(units: Unit[]): { headline: string; blocks: SummaryBlock[] 
 }
 
 function renderBullets(units: Unit[], headline: string): { headline: string; blocks: SummaryBlock[] } {
-  const ordered = [...units].sort((a, b) => a.index - b.index)
+  const lines = clausesOf(units)
   return {
     headline,
-    blocks: ordered.length ? [{ heading: headline ? '' : '要点', lines: linesOf(ordered), list: true }] : [],
+    blocks: lines.length ? [{ heading: headline ? '' : '要点', lines, list: true }] : [],
   }
 }
 
 function renderFlash(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const ordered = [...units].sort((a, b) => a.index - b.index)
+  const lines = clausesOf([...units].sort((a, b) => b.score - a.score || a.index - b.index))
   return {
-    headline: headlineOf(units),
-    blocks: ordered.length ? [{ heading: '要点', lines: linesOf(ordered), list: true }] : [],
+    headline: titleCandidates(units)[0] || headlineOf(units),
+    blocks: lines.length ? [{ heading: '分かっていること', lines, list: true }] : [],
   }
 }
 
 function renderLead(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const best = pickHeadlineSource(units)
-  const rest = [...units].filter((unit) => unit.index !== best?.index).sort((a, b) => a.index - b.index)
+  const best = [...units].sort((a, b) => Number(b.kind === 'decision') - Number(a.kind === 'decision') || b.score - a.score)[0]
+  const conclusion = best ? pointClause(best.text) : ''
+  const rest = clausesOf(units.filter((unit) => unit.index !== best?.index).sort((a, b) => a.index - b.index))
   const blocks: SummaryBlock[] = []
-  if (best) blocks.push({ heading: '結論', lines: [ensurePeriod(best.text)] })
-  if (rest.length > 0) blocks.push({ heading: '経緯', lines: linesOf(rest) })
-  return { headline: headlineOf(units), blocks }
+  if (conclusion) blocks.push({ heading: '結論', lines: [conclusion] })
+  const background = rest.filter((line) => line !== conclusion)
+  if (background.length > 0) blocks.push({ heading: '経緯', lines: background })
+  return { headline: titleCandidates(units)[0] || conclusion || headlineOf(units), blocks }
 }
 
 function renderTimeline(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
   const ordered = [...units].sort((a, b) => a.index - b.index)
-  return {
-    headline: headlineOf(units),
-    blocks: ordered.length ? [{ heading: '流れ', lines: linesOf(ordered), list: true }] : [],
+  const labels = ['はじめに', '次に', 'そのあと']
+  const blocks: SummaryBlock[] = []
+  const parts = Math.min(labels.length, ordered.length)
+  const size = parts > 0 ? Math.ceil(ordered.length / parts) : 0
+  for (let index = 0; index < parts; index += 1) {
+    const lines = clausesOf(ordered.slice(index * size, (index + 1) * size))
+    if (lines.length > 0) blocks.push({ heading: labels[index] ?? 'そのあと', lines, list: true })
   }
+  return { headline: titleCandidates(ordered)[0] || headlineOf(ordered), blocks }
 }
 
 function renderContrast(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const blocks: SummaryBlock[] = []
-  const agreed = units.filter((unit) => unit.kind === 'decision')
-  const worried = units.filter((unit) => unit.kind === 'issue')
-  const other = units.filter((unit) => unit.kind !== 'decision' && unit.kind !== 'issue')
-  if (agreed.length > 0) blocks.push({ heading: 'まとまったこと', lines: linesOf(agreed), list: true })
-  if (worried.length > 0) blocks.push({ heading: '残っていること', lines: linesOf(worried), list: true })
-  if (other.length > 0) blocks.push({ heading: 'ほか', lines: linesOf(other), list: true })
-  if (blocks.length === 0 && units.length > 0) blocks.push({ heading: '要点', lines: linesOf(units), list: true })
-  return { headline: headlineOf(units), blocks }
+  const blocks = kindBlocks(units, [
+    ['decision', 'まとまったこと'],
+    ['issue', '残っていること'],
+  ])
+  if (blocks.length === 0 && units.length > 0) blocks.push({ heading: '要点', lines: clausesOf(units), list: true })
+  return { headline: titleCandidates(units)[0] || headlineOf(units), blocks }
 }
 
 function renderTodo(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const blocks: SummaryBlock[] = []
-  const tasks = units.filter((unit) => unit.kind === 'action')
-  const when = units.filter((unit) => unit.kind === 'schedule')
-  const other = units.filter((unit) => unit.kind !== 'action' && unit.kind !== 'schedule')
-  if (tasks.length > 0) blocks.push({ heading: 'やること', lines: linesOf(tasks), list: true })
-  if (when.length > 0) blocks.push({ heading: '期限', lines: linesOf(when), list: true })
-  if (other.length > 0) blocks.push({ heading: '関連する話', lines: linesOf(other), list: true })
-  if (blocks.length === 0 && units.length > 0) blocks.push({ heading: 'やること', lines: linesOf(units), list: true })
-  return { headline: headlineOf(units), blocks }
+  const blocks = kindBlocks(units, [
+    ['action', 'やること'],
+    ['schedule', '期限'],
+  ])
+  if (blocks.length === 0 && units.length > 0) blocks.push({ heading: 'やること', lines: clausesOf(units), list: true })
+  return { headline: titleCandidates(units)[0] || headlineOf(units), blocks }
 }
 
 function renderFive(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
   const order = ['何を', 'なぜ', 'いつ', 'どこで', 'どのように', '誰が'] as const
-  const buckets = new Map<string, Unit[]>()
+  const buckets = new Map<string, string[]>()
   for (const unit of units) {
-    const slot = fiveSlot(unit)
-    const list = buckets.get(slot) ?? []
-    list.push(unit)
-    buckets.set(slot, list)
+    const answer = fiveAnswer(unit)
+    const list = buckets.get(answer.slot) ?? []
+    list.push(answer.line)
+    buckets.set(answer.slot, list)
   }
   const blocks: SummaryBlock[] = []
   for (const heading of order) {
-    const grouped = buckets.get(heading) ?? []
-    if (grouped.length > 0) blocks.push({ heading, lines: linesOf(grouped), list: true })
+    const lines = uniqueLines(buckets.get(heading) ?? [])
+    if (lines.length > 0) blocks.push({ heading, lines, list: true })
   }
-  return { headline: headlineOf(units), blocks }
-}
-
-function fiveSlot(unit: Unit): string {
-  const body = unit.text.replace(/^[^：:\n]{1,16}[：:]/, '')
-  if (/会議室|場所は|本社|倉庫|会場|店頭|店舗/.test(body)) return 'どこで'
-  if (/担当は|がやり|が共有|が置き/.test(body)) return '誰が'
-  if (unit.kind === 'decision') return '何を'
-  if (unit.kind === 'issue') return 'なぜ'
-  if (unit.kind === 'schedule') return 'いつ'
-  if (unit.kind === 'action') return 'どのように'
-  return '何を'
+  return { headline: titleCandidates(units)[0] || headlineOf(units), blocks }
 }
 
 function renderReport(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const best = pickHeadlineSource(units)
+  const best = [...units].sort((a, b) => Number(b.kind === 'decision') - Number(a.kind === 'decision') || b.score - a.score)[0]
   const later = units.filter((unit) => unit.kind === 'schedule' || unit.kind === 'action')
   const laterIds = new Set(later.map((unit) => unit.index))
   const body = [...units]
     .filter((unit) => unit.index !== best?.index && !laterIds.has(unit.index))
     .sort((a, b) => a.index - b.index)
   const blocks: SummaryBlock[] = []
-  if (best) blocks.push({ heading: '要旨', lines: [ensurePeriod(best.text)] })
-  if (body.length > 0) blocks.push({ heading: '本文', lines: linesOf(body) })
-  if (later.length > 0) blocks.push({ heading: 'このあと', lines: linesOf(later), list: true })
-  return { headline: headlineOf(units), blocks }
+  const gist = best ? pointClause(best.text) : ''
+  if (gist) blocks.push({ heading: '要旨', lines: [gist] })
+  const middle = clausesOf(body)
+  if (middle.length > 0) blocks.push({ heading: '本文', lines: middle })
+  const next = clausesOf(later)
+  if (next.length > 0) blocks.push({ heading: 'このあと', lines: next, list: true })
+  return { headline: titleCandidates(units)[0] || gist || headlineOf(units), blocks }
+}
+
+function kindBlocks(units: Unit[], order: [Kind, string][]): SummaryBlock[] {
+  const blocks: SummaryBlock[] = []
+  for (const [kind, heading] of order) {
+    const lines = clausesOf(units.filter((unit) => unit.kind === kind))
+    if (lines.length > 0) blocks.push({ heading, lines, list: true })
+  }
+  return blocks
+}
+
+function clausesOf(units: Unit[]): string[] {
+  return uniqueLines(units.map((unit) => pointClause(unit.text, unit.kind)))
+}
+
+function uniqueLines(lines: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const line of lines) {
+    const text = line.trim()
+    if (charCount(text) < 6 || seen.has(text)) continue
+    seen.add(text)
+    out.push(text)
+  }
+  return out
+}
+
+function titleCandidates(units: Unit[]): string[] {
+  const ranked = [...units].sort((a, b) => b.score - a.score || a.index - b.index)
+  const pool: string[] = []
+  for (const unit of ranked) {
+    const spoken = spokenBody(unit.text).replace(/^決定(?:は|事項は)[、,]/, '')
+    for (const bit of spoken.split(/[。！？!?、]/)) pool.push(titleFrom(bit))
+    pool.push(titleFrom(unit.text))
+  }
+  const picked: string[] = []
+  for (const title of pool) {
+    if (picked.length === 3) break
+    if (charCount(title) < 6) continue
+    if (!ranked.some((unit) => unit.text.includes(title))) continue
+    if (picked.some((item) => item === title || jaccard(item, title) > 0.62)) continue
+    picked.push(title)
+  }
+  return picked
+}
+
+function titleFrom(text: string): string {
+  const clause = pointClause(text)
+  if (charCount(clause) <= 24) return clause
+  const chars = Array.from(clause)
+  const slice = chars.slice(0, 24).join('')
+  let cut = -1
+  for (let index = slice.length - 1; index >= 8; index -= 1) {
+    if ('、はがをにへとで'.includes(slice[index] ?? '')) cut = index
+  }
+  const head = (cut > 0 ? slice.slice(0, cut) : slice).replace(/[、，,\s　]+$/g, '')
+  return clause.includes(head) ? head : clause
+}
+
+function pointClause(text: string, kind?: Kind): string {
+  const spoken = spokenBody(text).trim()
+  if (!spoken) return ''
+  const body = spoken.replace(/^決定(?:は|事項は)[、,]/, '')
+  const bits = body
+    .split(/[。！？!?、]/)
+    .map((bit) => bit.trim().replace(/(?:してください|ことです|です)$/g, '').trim())
+    .filter((bit) => spoken.includes(bit) && charCount(bit) >= 6)
+  if (bits.length === 0) {
+    const plain = body.replace(/[。！？!?]+$/g, '').trim()
+    return spoken.includes(plain) ? plain : spoken
+  }
+  return [...bits].sort((a, b) => clauseScore(b, kind) - clauseScore(a, kind) || charCount(b) - charCount(a))[0] ?? body
+}
+
+function clauseScore(text: string, kind?: Kind): number {
+  let score = 0
+  if (/\d/.test(text)) score += 3
+  if (/円|決定|売り|担当|まで|出荷|保留|賛成|します|置きます|終えます/.test(text)) score += 2
+  if (kind === 'issue' && /保留|懸念|反対|厳しい|赤字|難しい|決めません|分かれ/.test(text)) score += 6
+  if (kind === 'schedule' && /月|まで|出荷|次回|入庫/.test(text)) score += 4
+  if (kind === 'decision' && /決定|売り|円|賛成/.test(text)) score += 3
+  if (kind === 'action' && /します|担当|共有|終えます|置きます|明記/.test(text)) score += 3
+  const count = charCount(text)
+  if (count >= 8 && count <= 28) score += 2
+  if (count > 42) score -= 2
+  return score
+}
+
+function fiveAnswer(unit: Unit): { slot: string; line: string } {
+  const body = spokenBody(unit.text)
+  const found = (slot: string, pattern: RegExp) => {
+    const line = pattern.exec(body)?.[0]?.replace(/[、，\s　]+$/g, '') ?? ''
+    return line && body.includes(line) ? { slot, line } : null
+  }
+  return (
+    found('どこで', /場所は[^。]{1,20}|本社会議室|関東の\d+店舗/) ||
+    found('誰が', /担当は[^。]{1,16}/) ||
+    found('いつ', /\d+月\d+日(?:\d+時|まで|から|に\d[\d,]*本)?|来週[^。、]{2,8}まで/) ||
+    found('なぜ', /[^。、]{4,16}(?:近づきます|かかります|厳しいです|保留です|決めません)/) ||
+    found('どのように', /注釈に[^。]{0,18}|共有フォルダへ[^。]{0,20}|A4で[^。]{0,16}/) || {
+      slot: unit.kind === 'issue' ? 'なぜ' : unit.kind === 'schedule' ? 'いつ' : unit.kind === 'action' ? 'どのように' : '何を',
+      line: pointClause(unit.text),
+    }
+  )
 }
 
 function spreadRank(units: Unit[]): Unit[] {
