@@ -104,7 +104,7 @@ export class FileEar {
     this.worker = new Worker(new URL('./ear.worker.ts', import.meta.url), { type: 'module' })
     this.worker.onmessage = (event: MessageEvent<EarEvent>) => this.onWorker(event.data)
     this.worker.onerror = () => this.fail(new Error('worker'))
-    this.worker.postMessage({ type: 'warm' })
+    this.worker.postMessage({ type: 'warm', accurate: true })
   }
 
   private onWorker(data: EarEvent): void {

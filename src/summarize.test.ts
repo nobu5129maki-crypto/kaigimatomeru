@@ -249,6 +249,22 @@ describe('まとめ', () => {
     expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
   })
 
+  it('渋滞と重大は同じ文のまま残る', () => {
+    const text = '佐藤：首都高は渋滞、その影響は重大です。田中：迂回路の案を明日までに出します。'
+    for (const style of ['bullets', 'titled', 'fivew', 'contrast', 'lead', 'report'] as StyleId[]) {
+      const doc = summarize({
+        text,
+        title: '道路',
+        date: '2026-11-28',
+        attendees: '佐藤、田中',
+        length: 'c400',
+        style,
+      })
+      const kept = doc.blocks.flatMap((block) => block.lines).some((line) => line.includes('渋滞') && line.includes('重大'))
+      expect(kept, style).toBe(true)
+    }
+  })
+
   it('見出しをつけるはタイトルを決め、候補を3つ出す', () => {
     const doc = summarize({
       text: SAMPLE_TRANSCRIPT,

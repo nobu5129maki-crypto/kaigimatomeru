@@ -415,7 +415,7 @@ function classify(text: string): Kind {
   const body = text.replace(/^[^：:\n]{1,16}[：:]/, '')
   if (/決定は|決定事項|に決定|を決定|で決定|承認|了承|合意|可決|賛成|進める|見直す|で売り|優先します/.test(body)) return 'decision'
   if (/宿題|担当|お願い|私が|共有|作成|修正|準備|送付|終えます|置きます|明記/.test(body)) return 'action'
-  if (/課題|懸念|問題|リスク|反対|保留|難しい|未定|分かれ|厳しい|赤字|受けません|決めません/.test(body)) return 'issue'
+  if (/課題|懸念|問題|リスク|反対|保留|難しい|未定|分かれ|厳しい|赤字|受けません|決めません|重大|重要|渋滞/.test(body)) return 'issue'
   if (/次回|来週|来月|日程|締め切り|期限|までに|出荷|入庫/.test(body)) return 'schedule'
   return 'fact'
 }
@@ -429,6 +429,7 @@ function scoreUnits(texts: string[], style: StyleId): Unit[] {
     if (style === 'point') score += pointBonus(text, index, texts.length)
     if (/\d/.test(text)) score += 1
     if (/決定は|決定事項|保留/.test(text)) score += 2
+    if (/重大|重要|渋滞|問題|危険|影響/.test(spokenBody(text))) score += 4
     if (index >= texts.length - 2 && style !== 'timeline') score += 1
     const len = charCount(text)
     if (len < 8) score -= 3
@@ -602,7 +603,7 @@ function renderFlash(units: Unit[]): { headline: string; blocks: SummaryBlock[] 
 
 function renderLead(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
   const best = [...units].sort((a, b) => Number(b.kind === 'decision') - Number(a.kind === 'decision') || b.score - a.score)[0]
-  const conclusion = best ? pointClause(best.text) : ''
+  const conclusion = best ? faithfulLine(best.text) : ''
   const rest = clausesOf(units.filter((unit) => unit.index !== best?.index).sort((a, b) => a.index - b.index))
   const blocks: SummaryBlock[] = []
   if (conclusion) blocks.push({ heading: '結論', lines: [conclusion] })
@@ -667,7 +668,7 @@ function renderReport(units: Unit[]): { headline: string; blocks: SummaryBlock[]
     .filter((unit) => unit.index !== best?.index && !laterIds.has(unit.index))
     .sort((a, b) => a.index - b.index)
   const blocks: SummaryBlock[] = []
-  const gist = best ? pointClause(best.text) : ''
+  const gist = best ? faithfulLine(best.text) : ''
   if (gist) blocks.push({ heading: '要旨', lines: [gist] })
   const middle = clausesOf(body)
   if (middle.length > 0) blocks.push({ heading: '本文', lines: middle })
@@ -686,7 +687,13 @@ function kindBlocks(units: Unit[], order: [Kind, string][]): SummaryBlock[] {
 }
 
 function clausesOf(units: Unit[]): string[] {
-  return uniqueLines(units.map((unit) => pointClause(unit.text, unit.kind)))
+  return uniqueLines(units.map((unit) => faithfulLine(unit.text)))
+}
+
+function faithfulLine(text: string): string {
+  const spoken = spokenBody(text).replace(/\s+/g, ' ').trim()
+  if (!spoken) return ''
+  return ensurePeriod(spoken)
 }
 
 function uniqueLines(lines: string[]): string[] {
@@ -763,21 +770,19 @@ function clauseScore(text: string, kind?: Kind): number {
 }
 
 function fiveAnswer(unit: Unit): { slot: string; line: string } {
-  const body = spokenBody(unit.text)
-  const found = (slot: string, pattern: RegExp) => {
-    const line = pattern.exec(body)?.[0]?.replace(/[、，\s　]+$/g, '') ?? ''
-    return line && body.includes(line) ? { slot, line } : null
-  }
-  return (
-    found('どこで', /場所は[^。]{1,20}|本社会議室|関東の\d+店舗/) ||
-    found('誰が', /担当は[^。]{1,16}/) ||
-    found('いつ', /\d+月\d+日(?:\d+時|まで|から|に\d[\d,]*本)?|来週[^。、]{2,8}まで/) ||
-    found('なぜ', /[^。、]{4,16}(?:近づきます|かかります|厳しいです|保留です|決めません)/) ||
-    found('どのように', /注釈に[^。]{0,18}|共有フォルダへ[^。]{0,20}|A4で[^。]{0,16}/) || {
-      slot: unit.kind === 'issue' ? 'なぜ' : unit.kind === 'schedule' ? 'いつ' : unit.kind === 'action' ? 'どのように' : '何を',
-      line: pointClause(unit.text),
-    }
-  )
+  return { slot: fiveSlot(spokenBody(unit.text), unit.kind), line: faithfulLine(unit.text) }
+}
+
+function fiveSlot(body: string, kind: Kind): string {
+  if (/場所は|本社会議室|関東の\d+店舗/.test(body)) return 'どこで'
+  if (/担当は/.test(body)) return '誰が'
+  if (/\d+月\d+日|来週/.test(body)) return 'いつ'
+  if (/近づきます|かかります|厳しい|保留|決めません|重大|重要|渋滞/.test(body)) return 'なぜ'
+  if (/注釈に|共有フォルダへ|A4で/.test(body)) return 'どのように'
+  if (kind === 'issue') return 'なぜ'
+  if (kind === 'schedule') return 'いつ'
+  if (kind === 'action') return 'どのように'
+  return '何を'
 }
 
 function spreadRank(units: Unit[]): Unit[] {
