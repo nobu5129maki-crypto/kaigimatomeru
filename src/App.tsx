@@ -638,15 +638,15 @@ export function App() {
     if (jump !== null && jump / 1000 < audio.duration) audio.currentTime = jump / 1000
   }
 
-  async function sendToPc() {
+  async function downloadWord() {
     if (!doc || doc.charCount === 0) return
-    setNotice('Wordファイルを用意しています。')
+    setNotice('Word形式のファイルを用意しています。')
     const blob = await docxBlob(doc)
     const filename = `${fileStem(doc)}.docx`
-    const outcome = await shareFile(blob, filename, '会議のまとめです。パソコンで清書してください。')
-    if (outcome === 'cancelled') setNotice('送信をキャンセルしました。')
-    else if (outcome === 'shared') setNotice('共有シートを開きました。パソコン宛に送って清書できます。')
-    else setNotice('Wordファイルを保存しました。メールやチャットに添付すると、パソコンで清書できます。')
+    const outcome = await shareFile(blob, filename, '会議のまとめです。')
+    if (outcome === 'cancelled') setNotice('共有をキャンセルしました。')
+    else if (outcome === 'shared') setNotice('共有シートを開きました。Word形式（.docx）のファイルを送れます。')
+    else setNotice('Word形式（.docx）をダウンロードしました。')
   }
 
   async function saveText(kind: 'txt' | 'md') {
@@ -654,11 +654,11 @@ export function App() {
     const stem = fileStem(doc)
     if (kind === 'md') {
       downloadBlob(new Blob([markdownDocument(doc)], { type: 'text/markdown;charset=utf-8' }), `${stem}.md`)
-      setNotice('Markdownを保存しました。')
+      setNotice('Markdown形式（.md）をダウンロードしました。')
       return
     }
     downloadBlob(textBlob(documentText(doc)), `${stem}.txt`)
-    setNotice('テキストを保存しました。メモ帳やWordで開けます。')
+    setNotice('テキスト形式（.txt）をダウンロードしました。')
   }
 
   const pickedNow = summarySelection()
@@ -1045,8 +1045,8 @@ export function App() {
             <>
               <Manuscript key={generation} doc={doc} onChange={editDoc} />
               <div className="actions noprint">
-                <button type="button" className="primary" disabled={doc.charCount === 0} onClick={() => void sendToPc()}>
-                  パソコンへ送る
+                <button type="button" className="primary" disabled={doc.charCount === 0} onClick={() => void downloadWord()}>
+                  Word形式でダウンロード
                 </button>
                 <button
                   type="button"
@@ -1056,17 +1056,17 @@ export function App() {
                   コピー
                 </button>
                 <button type="button" disabled={doc.charCount === 0} onClick={() => void saveText('txt')}>
-                  テキストで保存
+                  テキスト形式でダウンロード
                 </button>
                 <button type="button" disabled={doc.charCount === 0} onClick={() => void saveText('md')}>
-                  Markdown
+                  Markdown形式でダウンロード
                 </button>
                 <button type="button" onClick={() => window.print()}>
-                  印刷
+                  原稿を印刷
                 </button>
               </div>
               <p className="fine noprint">
-                直した題名、見出し、本文が、コピー、Word、テキスト、印刷にそのまま出ます。「パソコンへ送る」は Word（.docx）です。
+                直した題名、見出し、本文が、コピー、ダウンロード、印刷にそのまま出ます。
               </p>
             </>
           ) : (
