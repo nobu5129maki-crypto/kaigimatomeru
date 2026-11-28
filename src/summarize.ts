@@ -914,6 +914,11 @@ function plainFrom(headline: string, blocks: SummaryBlock[]): string {
   return parts.join('\n').trim()
 }
 
+export function measureBody(headline: string, blocks: SummaryBlock[]): { plain: string; charCount: number } {
+  const plain = plainFrom(headline, blocks)
+  return { plain, charCount: charCount(plain) }
+}
+
 function forceTrim(
   body: { headline: string; blocks: SummaryBlock[]; plain: string; charCount: number },
   max: number,

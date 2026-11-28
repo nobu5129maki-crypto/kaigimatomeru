@@ -1,6 +1,8 @@
 import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
 import { audioFileName, formatClock, recordingBlock } from './capture'
+import { applyDraft, draftKey, isDraft, snapshot, type DraftBody } from './draft'
 import { docxBlob, downloadBlob, fileStem, markdownDocument, shareFile, textBlob } from './files'
+import { Manuscript } from './Manuscript'
 import { decodeTo16k, FileEar, isAudioFile, limitPcm } from './fileEar'
 import {
   FieldRecorder,
@@ -48,6 +50,7 @@ type HistoryItem = {
   length: LengthId
   style: StyleId
   styles?: StyleId[]
+  draft?: DraftBody
 }
 
 type Pref = { length: LengthId; styles: StyleId[] }
@@ -94,7 +97,7 @@ function loadHistory(): HistoryItem[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(isHistory).slice(0, 12)
+    return parsed.filter(isHistory).slice(0, 12).map((item) => (isDraft(item.draft) ? item : { ...item, draft: undefined }))
   } catch {
     return []
   }
@@ -228,6 +231,8 @@ export function App() {
   const [hearing, setHearing] = useState(false)
   const [bar, setBar] = useState(0)
   const [doc, setDoc] = useState<SummaryResult | null>(null)
+  const [fresh, setFresh] = useState('')
+  const [generation, setGeneration] = useState(0)
   const [signed, setSigned] = useState('')
   const [notice, setNotice] = useState('')
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -246,6 +251,7 @@ export function App() {
   const barCapRef = useRef(8)
   const audioFileRef = useRef<HTMLInputElement>(null)
   const heardModeRef = useRef('')
+  const draftIdRef = useRef('')
 
   const micBlock = recordingBlock()
 
@@ -363,6 +369,30 @@ export function App() {
     } catch {
       setNotice('この端末の保存容量が足りず、履歴は残せませんでした。まとめ自体は画面に出ています。')
     }
+  }
+
+  function openDraft(next: SummaryResult, origin: string, historyId: string) {
+    setDoc(next)
+    setFresh(origin)
+    setGeneration((current) => current + 1)
+    draftIdRef.current = historyId
+  }
+
+  function editDoc(next: SummaryResult) {
+    setDoc(next)
+    const id = draftIdRef.current
+    if (!id) return
+    setHistory((current) => {
+      const updated = current.map((item) =>
+        item.id === id ? { ...item, title: next.title.trim() || item.title, draft: snapshot(next) } : item,
+      )
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(updated.slice(0, 12)))
+      } catch {
+        /* 画面の原稿はそのまま残す */
+      }
+      return updated
+    })
   }
 
   async function startRecording() {
@@ -563,14 +593,15 @@ export function App() {
       style: picked.styles[0] ?? 'memo',
       styles: picked.styles,
     })
-    setDoc(next)
+    const itemId = `${Date.now()}`
+    openDraft(next, draftKey(next), next.charCount > 0 ? itemId : '')
     setSigned(signatureOf({ transcript: text, title, date, attendees, length: picked.length, styles: picked.styles }))
     const bits = [trimmed ? '先頭の3時間までを書き起こしました。' : '', speakerNote, next.note].filter(Boolean)
     setNotice(bits.join(''))
     showResult()
     if (next.charCount > 0) {
       const item: HistoryItem = {
-        id: `${Date.now()}`,
+        id: itemId,
         savedAt: new Date().toISOString(),
         title: title.trim(),
         date,
@@ -640,6 +671,7 @@ export function App() {
     styles: pickedNow.styles,
   })
   const dirty = Boolean(doc && signed && signed !== currentSignature)
+  const revised = Boolean(doc && fresh && draftKey(doc) !== fresh)
   const canSummarize = phase === 'idle' && !hearing && (Boolean(audioUrl) || charCount(transcript) > 0)
 
   return (
@@ -980,14 +1012,15 @@ export function App() {
           <p className="fine">
             長い録音は無音の位置で区切り、3時間を超える分は入りません。声で分けるときは、声の高さと間だけを見ます。音声はこの端末の外へ送りません。
           </p>
+          {revised ? <p className="alert">直した原稿があります。もう一度まとめると、直した文は置き換わります。</p> : null}
           <button type="button" className="summarize" disabled={!canSummarize} onClick={() => void runSummary()}>
             {hearing ? 'まとめています' : phase !== 'idle' ? '録音を止めてからまとめます' : 'この録音をまとめる'}
           </button>
         </section>
 
-        <section className="result" ref={resultRef} aria-live="polite">
-          {dirty ? <p className="alert">原稿か条件が変わっています。もう一度まとめると、表示が新しい内容になります。</p> : null}
-          {notice && !hearing ? <p className="notice">{notice}</p> : null}
+        <section className="result" ref={resultRef}>
+          {dirty ? <p className="alert">録音や条件が変わっています。もう一度まとめると、表示中の原稿は作り直されます。</p> : null}
+          {notice && !hearing ? <p className="notice" aria-live="polite">{notice}</p> : null}
           {hearing ? (
             <div className="empty working">
               <p>原稿を書いています。</p>
@@ -1008,42 +1041,24 @@ export function App() {
                 </div>
               </div>
             </div>
-          ) : doc && doc.charCount > 0 ? (
+          ) : doc && (doc.charCount > 0 || doc.blocks.length > 0) ? (
             <>
-              <article className={length === 'a4' ? 'paper sheet' : 'paper'} aria-label="まとめ原稿">
-                <p className="kicker">{doc.styleLabel}</p>
-                <h2>{doc.title}</h2>
-                <p className="dateline">
-                  {[doc.dateline, doc.attendees ? `出席：${doc.attendees}` : ''].filter(Boolean).join('　')}
-                </p>
-                {doc.headline && doc.headline !== doc.title ? <h3>{doc.headline}</h3> : null}
-                {doc.blocks.map((block, index) => (
-                  <section key={`${block.heading}-${index}`}>
-                    {block.heading ? <h4>{block.heading}</h4> : null}
-                    {block.list ? (
-                      <ul>
-                        {block.lines.map((line, lineIndex) => (
-                          <li key={`${index}-${lineIndex}`}>{line}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      block.lines.map((line, lineIndex) => <p key={`${index}-${lineIndex}`}>{line}</p>)
-                    )}
-                  </section>
-                ))}
-                <p className="count noprint">本文 {doc.charCount.toLocaleString('ja-JP')}文字（目標 {doc.target}文字）</p>
-              </article>
+              <Manuscript key={generation} doc={doc} onChange={editDoc} />
               <div className="actions noprint">
-                <button type="button" className="primary" onClick={() => void sendToPc()}>
+                <button type="button" className="primary" disabled={doc.charCount === 0} onClick={() => void sendToPc()}>
                   パソコンへ送る
                 </button>
-                <button type="button" onClick={() => void copyText(documentText(doc)).then(() => setNotice('原稿をコピーしました。'))}>
+                <button
+                  type="button"
+                  disabled={doc.charCount === 0}
+                  onClick={() => void copyText(documentText(doc)).then(() => setNotice('直した原稿をコピーしました。'))}
+                >
                   コピー
                 </button>
-                <button type="button" onClick={() => void saveText('txt')}>
+                <button type="button" disabled={doc.charCount === 0} onClick={() => void saveText('txt')}>
                   テキストで保存
                 </button>
-                <button type="button" onClick={() => void saveText('md')}>
+                <button type="button" disabled={doc.charCount === 0} onClick={() => void saveText('md')}>
                   Markdown
                 </button>
                 <button type="button" onClick={() => window.print()}>
@@ -1051,7 +1066,7 @@ export function App() {
                 </button>
               </div>
               <p className="fine noprint">
-                「パソコンへ送る」は Word（.docx）です。共有シートが出る端末ではメールやチャットに添付でき、出ない端末では保存されます。テキストもメモ帳で開けます。
+                直した題名、見出し、本文が、コピー、Word、テキスト、印刷にそのまま出ます。「パソコンへ送る」は Word（.docx）です。
               </p>
             </>
           ) : (
@@ -1090,7 +1105,8 @@ export function App() {
                           style: summaryStyles[0] ?? 'memo',
                           styles: summaryStyles,
                         })
-                        setDoc(next)
+                        const opened = item.draft ? applyDraft(next, item.draft) : next
+                        openDraft(opened, draftKey(item.draft ? next : opened), item.id)
                         setSigned(
                           signatureOf({
                             transcript: item.transcript,
@@ -1101,12 +1117,13 @@ export function App() {
                             styles: summaryStyles,
                           }),
                         )
-                        setNotice('保存していた原稿を開きました。')
+                        setNotice(item.draft ? '直した原稿を開きました。' : '保存していた原稿を開きました。')
                       }}
                     >
                       <strong>{item.title || '無題の会議'}</strong>
                       <span>
                         {item.date}　{styleCaption(activeStyles(item), item.length)}
+                        {item.draft ? <span className="draft-mark">直した</span> : null}
                       </span>
                     </button>
                     <button
