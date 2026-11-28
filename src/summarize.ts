@@ -197,7 +197,8 @@ function summarizeSingle(input: SummarizeInput): SummaryResult {
 function summarizeShapes(input: SummarizeInput, shapes: StyleId[]): SummaryResult {
   const length = LENGTHS[input.length]
   const title = input.title.trim()
-  const share = shapes.length
+  const bodyStyles = shapes.filter((id) => id !== 'titled')
+  const share = Math.max(1, bodyStyles.length)
   const sliceMax = Math.max(70, Math.floor(length.max / share))
   const sliceTarget = Math.max(40, Math.floor(length.target / share))
   const sliceMin = Math.min(sliceTarget, Math.max(24, Math.floor(length.min / share)))
@@ -205,7 +206,12 @@ function summarizeShapes(input: SummarizeInput, shapes: StyleId[]): SummaryResul
   const used = new Set<number>()
   const blocks: SummaryBlock[] = []
   let headline = ''
-  for (const style of shapes) {
+  if (shapes.includes('titled')) {
+    const titledUnits = scoreUnits(source, 'titled')
+    const line = titleCandidates(titledUnits)[0] || headlineOf(titledUnits)
+    if (line && line !== title) headline = line
+  }
+  for (const style of bodyStyles) {
     const all = scoreUnits(source, style)
     const fresh = all.filter((unit) => !used.has(unit.index))
     const scored = fresh.length ? fresh : all
@@ -573,15 +579,10 @@ function headlineOf(units: Unit[]): string {
 }
 
 function renderTitled(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
+  const lines = units.map((unit) => faithfulLine(unit.text)).filter((line) => line.length > 0)
   return {
     headline: titleCandidates(units)[0] || headlineOf(units),
-    blocks: kindBlocks(units, [
-      ['decision', '決まったこと'],
-      ['action', 'やること'],
-      ['issue', '残っていること'],
-      ['schedule', 'いつ'],
-      ['fact', '分かっていること'],
-    ]),
+    blocks: lines.length ? [{ heading: '', lines }] : [],
   }
 }
 

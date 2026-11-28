@@ -279,7 +279,7 @@ describe('まとめ', () => {
     }
   })
 
-  it('見出しをつけるはタイトルを一つ決める', () => {
+  it('見出しをつけるはタイトルを一つ決め、本文は箇条書きにしない', () => {
     const doc = summarize({
       text: SAMPLE_TRANSCRIPT,
       title: SAMPLE_TITLE,
@@ -289,13 +289,33 @@ describe('まとめ', () => {
       style: 'titled',
     })
     expect(doc.blocks.some((block) => block.heading === '見出しの候補')).toBe(false)
+    expect(doc.blocks.some((block) => block.list)).toBe(false)
     expect(doc.plain).not.toContain('このあと')
+    expect(documentText(doc)).not.toContain('・')
     expect(doc.headline.length).toBeGreaterThan(0)
     expect(SAMPLE_TRANSCRIPT).toContain(doc.headline)
-    expect(doc.blocks.some((block) => block.heading === '決まったこと')).toBe(true)
     for (const block of doc.blocks) {
       for (const line of block.lines) expect(line.includes('：')).toBe(false)
     }
+  })
+
+  it('見出しと読みやすいメモは、見出し付きの文章になり箇条書きにしない', () => {
+    const doc = summarize({
+      text: SAMPLE_TRANSCRIPT,
+      title: SAMPLE_TITLE,
+      date: SAMPLE_DATE,
+      attendees: SAMPLE_ATTENDEES,
+      length: 'c400',
+      style: 'memo',
+      styles: ['titled', 'memo'],
+    })
+    expect(doc.headline.length).toBeGreaterThan(0)
+    expect(SAMPLE_TRANSCRIPT).toContain(doc.headline)
+    expect(doc.blocks.some((block) => block.list)).toBe(false)
+    expect(documentText(doc)).not.toContain('・')
+    expect(doc.blocks.some((block) => block.heading.includes('読みやすいメモ'))).toBe(true)
+    expect(doc.styleLabel).toContain('見出しをつける')
+    expect(doc.styleLabel).toContain('読みやすいメモ')
   })
 
   it('形は話した文の写しではなく、その形の項目になる', () => {
