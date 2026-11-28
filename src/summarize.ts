@@ -1,3 +1,5 @@
+import { chooseWords } from './wordChoice'
+
 export type LengthId = 'c100' | 'c200' | 'c400' | 'c800' | 'a4' | 'c2000' | 'c4000' | 'point'
 export type StyleId =
   | 'titled'
@@ -128,6 +130,14 @@ function normalizeStyles(styles: StyleId[] | undefined, fallback: StyleId): Styl
 }
 
 export function summarize(input: SummarizeInput & { styles?: StyleId[] }): SummaryResult {
+  const text = chooseWords(input.text)
+  const result = summarizeChosen({ ...input, text })
+  if (text === input.text || result.charCount === 0) return result
+  const extra = '音の近い語は、前後の文から選びました。'
+  return { ...result, note: result.note ? `${result.note}${extra}` : extra }
+}
+
+function summarizeChosen(input: SummarizeInput & { styles?: StyleId[] }): SummaryResult {
   const chosen = normalizeStyles(input.styles, input.style).filter((id, index, all) => all.indexOf(id) === index)
   const withPoint =
     input.length === 'point' && !chosen.includes('point') ? orderStyles([...chosen, 'point']) : chosen

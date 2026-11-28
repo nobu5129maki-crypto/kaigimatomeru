@@ -249,6 +249,22 @@ describe('まとめ', () => {
     expect(doc.charCount).toBeGreaterThanOrEqual(doc.min)
   })
 
+  it('音が近い語は前後の文から選び直す', () => {
+    const doc = summarize({
+      text: '佐藤：首都高の重大を確認しました。田中：渋滞な問題は迂回で避けます。',
+      title: '道路',
+      date: '2026-11-28',
+      attendees: '佐藤、田中',
+      length: 'c400',
+      style: 'bullets',
+    })
+    expect(doc.plain).toContain('首都高の渋滞を確認しました')
+    expect(doc.plain).toContain('重大な問題')
+    expect(doc.plain).not.toContain('首都高の重大')
+    expect(doc.plain).not.toContain('渋滞な')
+    expect(doc.note).toContain('前後の文')
+  })
+
   it('渋滞と重大は同じ文のまま残る', () => {
     const text = '佐藤：首都高は渋滞、その影響は重大です。田中：迂回路の案を明日までに出します。'
     for (const style of ['bullets', 'titled', 'fivew', 'contrast', 'lead', 'report'] as StyleId[]) {
