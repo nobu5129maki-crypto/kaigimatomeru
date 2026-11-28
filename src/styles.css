@@ -392,17 +392,19 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .edit-tools button, .block-actions button { padding: 8px 12px; }
 .tool-cut { color: var(--seal); border-color: #e7c7bf; background: #fff; }
 .edit-hint { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.6; }
+.paper textarea,
 .paper .ink {
   display: block;
   width: 100%;
   margin: 0;
-  padding: 8px 10px;
+  min-height: 0;
+  padding: 2px 4px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 6px;
   background: transparent;
   resize: none;
   overflow: hidden;
-  line-height: 1.75;
+  line-height: 1.45;
   font-family: var(--serif);
   field-sizing: content;
 }
@@ -420,44 +422,48 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   line-height: 1.45;
 }
 .ink-headline {
-  margin-top: 12px;
-  font-size: 1.15rem;
+  margin-top: 6px;
+  font-size: 1.05rem;
   font-weight: 700;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 .ink-heading {
-  margin-top: 4px;
+  margin-top: 2px;
   font-family: var(--sans);
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   font-weight: 700;
-  line-height: 1.5;
+  line-height: 1.35;
   border-bottom: 1px solid var(--line);
-  border-radius: 10px 10px 0 0;
+  border-radius: 6px 6px 0 0;
 }
 .ink-meta {
   font-family: var(--sans);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.35;
 }
-.ink-line { min-height: 44px; }
+.ink-line { line-height: 1.7; }
 .meta-edit {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 0;
+  margin-top: 2px;
 }
 .meta-field { display: block; min-width: 0; }
 .meta-label {
   display: block;
-  margin: 4px 0 0;
-  padding-left: 10px;
+  margin: 6px 0 0;
+  padding-left: 4px;
   color: var(--muted);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
 }
 .add-headline {
-  margin-top: 10px;
+  margin-top: 4px;
+  min-height: 0;
+  padding: 2px 10px;
+  font-size: 0.82rem;
   color: var(--seal);
   background: transparent;
   border-style: dashed;
@@ -466,8 +472,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .block-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 6px 0 2px;
+  gap: 6px;
+  margin: 2px 0;
+}
+.block-actions button {
+  min-height: 32px;
+  padding: 2px 10px;
+  font-size: 0.78rem;
 }
 .line-row {
   display: grid;
