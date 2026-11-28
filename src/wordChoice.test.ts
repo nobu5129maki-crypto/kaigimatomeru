@@ -52,6 +52,65 @@ describe('前後の文から語を選ぶ', () => {
     expect(chooseWords('病院へ搬送しました。重大です。')).toBe('病院へ搬送しました。重体です。')
   })
 
+  it('専門知識の公布は豊富にし、法律の公布は残す', () => {
+    expect(chooseWords('公布な専門知識を持っています。')).toBe('豊富な専門知識を持っています。')
+    expect(chooseWords('豊富な経験があります。')).toBe('豊富な経験があります。')
+    expect(chooseWords('法律は本日公布されました。')).toBe('法律は本日公布されました。')
+  })
+
+  it('発見された自体は遺体にし、問題自体は残す', () => {
+    expect(chooseWords('現場で自体が発見されました。')).toBe('現場で遺体が発見されました。')
+    expect(chooseWords('問題自体は残っています。')).toBe('問題自体は残っています。')
+    expect(chooseWords('会議自体は続行します。')).toBe('会議自体は続行します。')
+    expect(chooseWords('発見自体は問題です。')).toBe('発見自体は問題です。')
+  })
+
+  it('学校の女子制度は女子生徒にし、改正する制度は残す', () => {
+    expect(chooseWords('高校の授業に女子制度が参加します。')).toBe('高校の授業に女子生徒が参加します。')
+    expect(chooseWords('先生が話しました。女子制度が来ます。')).toBe('先生が話しました。女子生徒が来ます。')
+    expect(chooseWords('新しい女子制度を改正します。')).toBe('新しい女子制度を改正します。')
+  })
+
+  it('会見の報道時は報道陣にし、時刻の報道時は残す', () => {
+    expect(chooseWords('会見には報道時が集まりました。')).toBe('会見には報道陣が集まりました。')
+    expect(chooseWords('報道時の時刻を確認します。')).toBe('報道時の時刻を確認します。')
+  })
+
+  it('講座の公主は講師にし、王朝の公主は残す', () => {
+    expect(chooseWords('講座の公主が説明します。')).toBe('講座の講師が説明します。')
+    expect(chooseWords('講師が講義をします。')).toBe('講師が講義をします。')
+    expect(chooseWords('王朝の公主が登場します。')).toBe('王朝の公主が登場します。')
+  })
+
+  it('講座のアダムセは受講生にする', () => {
+    expect(chooseWords('この講座のアダムセは30人です。')).toBe('この講座の受講生は30人です。')
+    expect(chooseWords('講座ではアダムセです。')).toBe('講座では受講生です。')
+    expect(chooseWords('受講生は30人です。')).toBe('受講生は30人です。')
+    const fixed = chooseWords('この講座のアダムセは30人です。')
+    expect(chooseWords(fixed)).toBe(fixed)
+  })
+
+  it('同じ話の取り違えをまとめて直す', () => {
+    const text = [
+      '公布な専門知識を紹介します。',
+      '現場で自体が発見されました。問題自体は残します。',
+      '高校の授業に女子制度が参加します。',
+      '会見には報道時が集まりました。',
+      '講座の公主が説明します。',
+      'この講座のアダムセは30人です。',
+    ].join('')
+    const fixed = [
+      '豊富な専門知識を紹介します。',
+      '現場で遺体が発見されました。問題自体は残します。',
+      '高校の授業に女子生徒が参加します。',
+      '会見には報道陣が集まりました。',
+      '講座の講師が説明します。',
+      'この講座の受講生は30人です。',
+    ].join('')
+    expect(chooseWords(text)).toBe(fixed)
+    expect(chooseWords(fixed)).toBe(fixed)
+  })
+
   it('例文と、一度選んだ文は変えない', () => {
     expect(chooseWords(SAMPLE_TRANSCRIPT)).toBe(SAMPLE_TRANSCRIPT)
     const fixed = chooseWords('首都高の重大を確認しました。')

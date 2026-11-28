@@ -111,6 +111,134 @@ const CLUSTERS: Sense[][] = [
       illegal: [],
     },
   ],
+  [
+    {
+      word: '豊富',
+      after: [
+        { pattern: /^な(?!ら)/, weight: 4 },
+        { pattern: /^に/, weight: 2 },
+        { pattern: /^だ/, weight: 3 },
+        { pattern: /^です/, weight: 2 },
+        { pattern: /^さ/, weight: 3 },
+      ],
+      before: [{ pattern: /(?:とても|極めて|非常に)$/, weight: 2 }],
+      cues: [{ pattern: /知識|経験|実績|人材|専門|資源|品揃え|品ぞろえ/, weight: 4, reach: 'sentence' }],
+      illegal: [],
+    },
+    {
+      word: '公布',
+      after: [
+        { pattern: /^され/, weight: 4 },
+        { pattern: /^し/, weight: 3 },
+        { pattern: /^の/, weight: 2 },
+      ],
+      before: [],
+      cues: [{ pattern: /法律|政令|官報|施行|法令|条例/, weight: 4, reach: 'sentence' }],
+      illegal: [/^な(?!ら)/],
+    },
+  ],
+  [
+    {
+      word: '遺体',
+      after: [{ pattern: /^[がをはのにで]/, weight: 2 }],
+      before: [],
+      cues: [{ pattern: /発見|安置|検視|身元|死因|火葬|解剖|死亡|亡くな|収容|司法/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: '自体',
+      after: [{ pattern: /^[はがをもに]/, weight: 2 }],
+      before: [{ pattern: /[一-龯々]$/, weight: 4 }],
+      cues: [],
+      illegal: [],
+    },
+  ],
+  [
+    {
+      word: '女子生徒',
+      after: [{ pattern: /^[がはをにも]/, weight: 2 }],
+      before: [],
+      cues: [{ pattern: /学校|高校|中学|小学|授業|部活|先生|クラス|登校|学年|担任|教室/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: '女子制度',
+      after: [{ pattern: /^を(?:改正|導入|整備|新設|廃止)/, weight: 4 }],
+      before: [],
+      cues: [{ pattern: /改正|導入|整備|新設|廃止|法律|法令|保険/, weight: 4, reach: 'sentence' }],
+      illegal: [],
+    },
+  ],
+  [
+    {
+      word: '男子生徒',
+      after: [{ pattern: /^[がはをにも]/, weight: 2 }],
+      before: [],
+      cues: [{ pattern: /学校|高校|中学|小学|授業|部活|先生|クラス|登校|学年|担任|教室/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: '男子制度',
+      after: [{ pattern: /^を(?:改正|導入|整備|新設|廃止)/, weight: 4 }],
+      before: [],
+      cues: [{ pattern: /改正|導入|整備|新設|廃止|法律|法令|保険/, weight: 4, reach: 'sentence' }],
+      illegal: [],
+    },
+  ],
+  [
+    {
+      word: '報道陣',
+      after: [{ pattern: /^[がはをにもへ]/, weight: 2 }],
+      before: [],
+      cues: [{ pattern: /取材|記者|会見|カメラ|質問|囲み|会見場/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: '報道時',
+      after: [
+        { pattern: /^の/, weight: 2 },
+        { pattern: /^点/, weight: 3 },
+      ],
+      before: [],
+      cues: [{ pattern: /時刻|時点|当時|日時/, weight: 3, reach: 'sentence' }],
+      illegal: [],
+    },
+  ],
+  [
+    {
+      word: '講師',
+      after: [{ pattern: /^[がはをにの]/, weight: 2 }],
+      before: [],
+      cues: [{ pattern: /講義|講演|セミナー|受講|講座|教室|研修|授業|大学|先生/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: '公主',
+      after: [],
+      before: [],
+      cues: [{ pattern: /皇帝|王朝|清朝|皇女/, weight: 4, reach: 'sentence' }],
+      illegal: [],
+    },
+  ],
+  [
+    {
+      word: '受講生',
+      after: [
+        { pattern: /^[がはをにの]/, weight: 2 },
+        { pattern: /^で/, weight: 2 },
+      ],
+      before: [],
+      cues: [{ pattern: /講座|講義|セミナー|教室|講師|受講|研修|授業/, weight: 4, reach: 'around' }],
+      illegal: [],
+    },
+    {
+      word: 'アダムセ',
+      after: [],
+      before: [],
+      cues: [],
+      illegal: [/^/],
+    },
+  ],
 ]
 
 const WORDS = CLUSTERS.flatMap((cluster) => cluster.map((sense) => sense.word)).sort((a, b) => b.length - a.length)

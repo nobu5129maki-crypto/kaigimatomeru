@@ -1,3 +1,5 @@
+import { chooseWords } from './wordChoice'
+
 const TARGET_RATE = 16000
 
 const HALLUCINATIONS = [
@@ -98,7 +100,7 @@ export function cleanHeard(text: string): string {
   const compact = trimmed.replace(/\s/g, '').toLowerCase()
   if (compact.length < 48 && HALLUCINATIONS.some((item) => compact.includes(item.replace(/\s/g, '').toLowerCase()))) return ''
   if (/^[（(][^）)]{0,24}[）)]$/.test(trimmed)) return ''
-  return collapseRepeats(trimmed)
+  return chooseWords(collapseRepeats(trimmed))
 }
 
 export function decideEar(input: {

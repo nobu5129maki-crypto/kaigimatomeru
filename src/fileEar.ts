@@ -1,5 +1,6 @@
 import { appendRecognized } from './capture'
 import { cleanHeard, downsample, normalizeUtterance, pcmEnergy } from './ear'
+import { chooseWords } from './wordChoice'
 
 const TARGET_RATE = 16000
 const MAX_SECONDS = 45 * 60
@@ -96,7 +97,7 @@ export class FileEar {
       const heard = cleanHeard(await this.hear(normalizeUtterance(slices[index])))
       if (heard) text = appendRecognized(text, heard)
     }
-    return text.trim()
+    return chooseWords(text.trim())
   }
 
   private ensure(): void {

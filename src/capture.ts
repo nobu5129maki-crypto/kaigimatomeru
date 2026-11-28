@@ -1,4 +1,5 @@
 import { LiveEar } from './ear'
+import { chooseWords } from './wordChoice'
 
 const PAUSE_BREAK_MS = 1800
 const SPEECH_BITRATE = 256000
@@ -531,6 +532,7 @@ export class MeetingRecorder {
     if (!this.base.trim()) this.base = clean
     else if (gap >= PAUSE_BREAK_MS && !this.base.endsWith('\n')) this.base = `${this.base}\n${clean}`
     else this.base = appendRecognized(this.base, clean)
+    this.base = chooseWords(this.base)
     this.lastVoiceAt = now
     this.markHeard()
   }
