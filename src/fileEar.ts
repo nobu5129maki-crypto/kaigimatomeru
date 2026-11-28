@@ -1,10 +1,9 @@
-import { appendRecognized } from './capture'
 import { cleanHeard, downsample, normalizeUtterance, pcmEnergy } from './ear'
+import { finishHearing, MAX_MEETING_SECONDS, planHearing, pushHearing } from './meeting'
 import { chooseWords } from './wordChoice'
 
 const TARGET_RATE = 16000
-const MAX_SECONDS = 45 * 60
-const CHUNK_SECONDS = 30
+const MAX_SECONDS = MAX_MEETING_SECONDS
 
 export const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'wav', 'aac', 'mp4', 'ogg', 'webm', 'flac', '3gp', 'caf', 'amr', 'wma', 'm4b']
 
@@ -82,22 +81,27 @@ export class FileEar {
 
   constructor(private onStatus: (update: EarProgress) => void) {}
 
-  async transcribe(pcm: Float32Array): Promise<string> {
+  async transcribe(pcm: Float32Array, options?: { speakers?: boolean; attendees?: string }): Promise<{ text: string; note: string }> {
     this.ensure()
-    const slices = slicePcm(pcm, TARGET_RATE, CHUNK_SECONDS).filter((slice) => pcmEnergy(slice) >= 0.006)
-    if (slices.length === 0) return ''
-    let text = ''
-    for (let index = 0; index < slices.length; index += 1) {
+    const plan = planHearing(pcm, TARGET_RATE, Boolean(options?.speakers), options?.attendees ?? '')
+    const pieces = plan.pieces.filter((piece) => pcmEnergy(pcm.subarray(piece.start, piece.end)) >= 0.006)
+    if (pieces.length === 0) return { text: '', note: plan.note }
+    let draft = { text: '', line: '', label: '' }
+    for (let index = 0; index < pieces.length; index += 1) {
+      const piece = pieces[index]
       this.writing = true
-      const span = meterSpan('chunk', index, slices.length)
+      const span = meterSpan('chunk', index, pieces.length)
       this.onStatus({
-        note: `原稿を書いています（${index + 1}/${slices.length}）。音声はこの端末の外へ送りません。`,
+        note: piece.label
+          ? `声で分けながら原稿を書いています（${index + 1}/${pieces.length}）。音声はこの端末の外へ送りません。`
+          : `無音の位置で区切って原稿を書いています（${index + 1}/${pieces.length}）。音声はこの端末の外へ送りません。`,
         ...span,
       })
-      const heard = cleanHeard(await this.hear(normalizeUtterance(slices[index])))
-      if (heard) text = appendRecognized(text, heard)
+      const heard = cleanHeard(await this.hear(normalizeUtterance(pcm.subarray(piece.start, piece.end))))
+      if (!heard) continue
+      draft = pushHearing(draft, heard, piece)
     }
-    return chooseWords(text.trim())
+    return { text: chooseWords(finishHearing(draft).trim()), note: plan.note }
   }
 
   private ensure(): void {

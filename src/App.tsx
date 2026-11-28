@@ -36,6 +36,7 @@ import {
 const HISTORY_KEY = 'kaigimatomeru.history.v1'
 const PREF_KEY = 'kaigimatomeru.pref.v1'
 const ROSTER_KEY = 'kaigimatomeru.roster.v1'
+const SPEAKER_KEY = 'kaigimatomeru.speakers.v1'
 
 type HistoryItem = {
   id: string
@@ -106,6 +107,14 @@ function isRoster(value: unknown): value is Roster {
     item.titles.every((entry) => typeof entry === 'string') &&
     item.groups.every((entry) => typeof entry === 'string') &&
     item.names.every((entry) => typeof entry === 'string')
+}
+
+function loadSpeakers(): boolean {
+  try {
+    return localStorage.getItem(SPEAKER_KEY) === 'on'
+  } catch {
+    return false
+  }
 }
 
 function loadRoster(): Roster {
@@ -223,6 +232,7 @@ export function App() {
   const [notice, setNotice] = useState('')
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [roster, setRoster] = useState<Roster>(emptyRoster)
+  const [speakers, setSpeakers] = useState(loadSpeakers)
   const [dragging, setDragging] = useState(false)
   const resultRef = useRef<HTMLElement>(null)
   const meterRef = useRef<HTMLSpanElement>(null)
@@ -235,6 +245,7 @@ export function App() {
   const fileEarRef = useRef<FileEar | null>(null)
   const barCapRef = useRef(8)
   const audioFileRef = useRef<HTMLInputElement>(null)
+  const heardModeRef = useRef('')
 
   const micBlock = recordingBlock()
 
@@ -302,6 +313,7 @@ export function App() {
         setAudioUrl(url)
         setAudioExt(take.extension)
         setTranscript('')
+        heardModeRef.current = ''
         setPlayMs(0)
       },
     })
@@ -367,6 +379,7 @@ export function App() {
     }
     setDoc(null)
     setTranscript('')
+    heardModeRef.current = ''
     setPlayMs(0)
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
     audioBlobRef.current = null
@@ -421,6 +434,7 @@ export function App() {
     setAudioUrl(url)
     setAudioExt(file.name.split('.').pop()?.toLowerCase() || 'wav')
     setTranscript('')
+    heardModeRef.current = ''
     setPeaks([])
     peaksRef.current = []
     setMarks([])
@@ -428,6 +442,15 @@ export function App() {
     setPlayMs(0)
     setDoc(null)
     setNotice('録音を開きました。まとめ方を選んで、この録音をまとめるを押してください。')
+  }
+
+  function keepSpeakers(next: boolean) {
+    setSpeakers(next)
+    try {
+      localStorage.setItem(SPEAKER_KEY, next ? 'on' : 'off')
+    } catch {
+      /* 次回は分けない設定から始めます */
+    }
   }
 
   function chooseStyle(id: StyleId) {
@@ -475,9 +498,11 @@ export function App() {
   async function runSummary() {
     if (phase !== 'idle' || hearing) return
     keepNames()
+    const speakerMode = speakers ? `on:${attendees.trim()}` : 'off'
     let text = transcript.trim()
     let trimmed = false
-    if (!text && audioBlobRef.current) {
+    let speakerNote = ''
+    if (audioBlobRef.current && (!text || heardModeRef.current !== speakerMode)) {
       setHearing(true)
       setDoc(null)
       setBar(3)
@@ -489,6 +514,9 @@ export function App() {
         const pcm = await decodeTo16k(await audioBlobRef.current.arrayBuffer())
         limited = limitPcm(pcm, 16000)
       } catch {
+        setHearing(false)
+        setBar(0)
+        barCapRef.current = 8
         setNotice('この録音はブラウザが読めませんでした。mp3、m4a、wavにしてから開いてください。')
         return
       }
@@ -498,11 +526,14 @@ export function App() {
           barCapRef.current = Math.max(barCapRef.current, update.cap * 100)
           setBar((current) => Math.max(current, update.ratio * 100))
         })
-        text = (await fileEarRef.current.transcribe(limited.pcm)).trim()
+        const heard = await fileEarRef.current.transcribe(limited.pcm, { speakers, attendees })
+        text = heard.text.trim()
+        speakerNote = heard.note
         if (!text) {
           setNotice('声が聞き取れませんでした。もう一度録音するか、別のファイルを開いてください。')
           return
         }
+        heardModeRef.current = speakerMode
         setTranscript(text)
         trimmed = limited.trimmed
       } catch (error) {
@@ -534,7 +565,8 @@ export function App() {
     })
     setDoc(next)
     setSigned(signatureOf({ transcript: text, title, date, attendees, length: picked.length, styles: picked.styles }))
-    setNotice(trimmed ? `先頭の45分までをまとめました。${next.note}` : next.note)
+    const bits = [trimmed ? '先頭の3時間までを書き起こしました。' : '', speakerNote, next.note].filter(Boolean)
+    setNotice(bits.join(''))
     showResult()
     if (next.charCount > 0) {
       const item: HistoryItem = {
@@ -920,6 +952,34 @@ export function App() {
               </fieldset>
             )
           })}
+          <fieldset>
+            <legend>話者</legend>
+            <div className="choices styles" role="radiogroup" aria-label="話者">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!speakers}
+                className={speakers ? 'choice' : 'choice is-on'}
+                onClick={() => keepSpeakers(false)}
+              >
+                <strong>分けない</strong>
+                <span>一つの原稿にします</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={speakers}
+                className={speakers ? 'choice is-on' : 'choice'}
+                onClick={() => keepSpeakers(true)}
+              >
+                <strong>声で分ける</strong>
+                <span>話者1、話者2と分けます。出席者が同じ人数なら、話し始めた順に名前を付けます</span>
+              </button>
+            </div>
+          </fieldset>
+          <p className="fine">
+            長い録音は無音の位置で区切り、3時間を超える分は入りません。声で分けるときは、声の高さと間だけを見ます。音声はこの端末の外へ送りません。
+          </p>
           <button type="button" className="summarize" disabled={!canSummarize} onClick={() => void runSummary()}>
             {hearing ? 'まとめています' : phase !== 'idle' ? '録音を止めてからまとめます' : 'この録音をまとめる'}
           </button>
