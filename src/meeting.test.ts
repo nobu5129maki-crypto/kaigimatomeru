@@ -57,7 +57,7 @@ describe('話者の分離', () => {
 
   it('一人の声には名前を付けない', () => {
     const pcm = tone(16000, 1.2, 160)
-    const plan = planHearing(pcm, 16000, true, '佐藤、田中')
+    const plan = planHearing(pcm, 16000, true)
     expect(plan.pieces.every((piece) => piece.label === '')).toBe(true)
     expect(plan.note).toContain('一人')
   })
@@ -65,17 +65,18 @@ describe('話者の分離', () => {
   it('分けないときはラベルを付けない', () => {
     const rate = 16000
     const pcm = join([tone(rate, 0.7, 180), new Float32Array(rate * 0.45), tone(rate, 0.7, 110)])
-    const plan = planHearing(pcm, rate, false, '佐藤、田中')
+    const plan = planHearing(pcm, rate, false)
     expect(plan.pieces.every((piece) => piece.label === '')).toBe(true)
     expect(plan.note).toBe('')
   })
 
-  it('出席者が同じ人数なら話し始めた順に名前を付ける', () => {
+  it('二人は話者1と話者2にする', () => {
     const rate = 16000
     const pcm = join([tone(rate, 0.7, 180), new Float32Array(rate * 0.45), tone(rate, 0.7, 110)])
-    const plan = planHearing(pcm, rate, true, '佐藤、田中')
-    expect(plan.pieces.map((piece) => piece.label)).toEqual(['佐藤', '田中'])
-    expect(plan.note).toContain('出席者')
+    const plan = planHearing(pcm, rate, true)
+    expect(plan.pieces.map((piece) => piece.label)).toEqual(['話者1', '話者2'])
+    expect(plan.note).toContain('2人')
+    expect(plan.pieces.some((piece) => piece.label.includes('佐藤'))).toBe(false)
   })
 
   it('同じ話者の続きは一行にし、人が変わると行を分ける', () => {
@@ -90,11 +91,4 @@ describe('話者の分離', () => {
     expect(finishHearing(draft)).toBe('佐藤：こんにちは。続きです。\n田中：はい。')
   })
 
-  it('人数が合わなければ話者番号のままにする', () => {
-    const rate = 16000
-    const pcm = join([tone(rate, 0.7, 180), new Float32Array(rate * 0.45), tone(rate, 0.7, 110)])
-    const plan = planHearing(pcm, rate, true, '佐藤')
-    expect(plan.pieces.map((piece) => piece.label)).toEqual(['話者1', '話者2'])
-    expect(plan.note).toContain('名前は声だけでは')
-  })
 })

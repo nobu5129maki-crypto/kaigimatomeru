@@ -81,9 +81,9 @@ export class FileEar {
 
   constructor(private onStatus: (update: EarProgress) => void) {}
 
-  async transcribe(pcm: Float32Array, options?: { speakers?: boolean; attendees?: string }): Promise<{ text: string; note: string }> {
+  async transcribe(pcm: Float32Array, options?: { speakers?: boolean }): Promise<{ text: string; note: string }> {
     this.ensure()
-    const plan = planHearing(pcm, TARGET_RATE, Boolean(options?.speakers), options?.attendees ?? '')
+    const plan = planHearing(pcm, TARGET_RATE, Boolean(options?.speakers))
     const pieces = plan.pieces.filter((piece) => pcmEnergy(pcm.subarray(piece.start, piece.end)) >= 0.006)
     if (pieces.length === 0) return { text: '', note: plan.note }
     let draft = { text: '', line: '', label: '' }

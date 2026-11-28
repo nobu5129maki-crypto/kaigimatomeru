@@ -498,7 +498,7 @@ export function App() {
   async function runSummary() {
     if (phase !== 'idle' || hearing) return
     keepNames()
-    const speakerMode = speakers ? `on:${attendees.trim()}` : 'off'
+    const speakerMode = speakers ? 'on' : 'off'
     let text = transcript.trim()
     let trimmed = false
     let speakerNote = ''
@@ -526,7 +526,7 @@ export function App() {
           barCapRef.current = Math.max(barCapRef.current, update.cap * 100)
           setBar((current) => Math.max(current, update.ratio * 100))
         })
-        const heard = await fileEarRef.current.transcribe(limited.pcm, { speakers, attendees })
+        const heard = await fileEarRef.current.transcribe(limited.pcm, { speakers })
         text = heard.text.trim()
         speakerNote = heard.note
         if (!text) {
@@ -973,7 +973,7 @@ export function App() {
                 onClick={() => keepSpeakers(true)}
               >
                 <strong>声で分ける</strong>
-                <span>話者1、話者2と分けます。出席者が同じ人数なら、話し始めた順に名前を付けます</span>
+                <span>話者1、話者2と分けます</span>
               </button>
             </div>
           </fieldset>

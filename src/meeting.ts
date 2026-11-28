@@ -1,5 +1,4 @@
 import { appendRecognized } from './capture'
-import { splitAttendees } from './roster'
 
 export const MAX_MEETING_SECONDS = 3 * 60 * 60
 
@@ -72,7 +71,7 @@ export function splitAtSilence(pcm: Float32Array, rate: number, targetSec = 30, 
   return spans
 }
 
-export function planHearing(pcm: Float32Array, rate: number, separate: boolean, attendees: string): HearingPlan {
+export function planHearing(pcm: Float32Array, rate: number, separate: boolean): HearingPlan {
   const whole = splitAtSilence(pcm, rate)
   if (!separate) return { pieces: whole.map((span) => ({ ...span, label: '', stitch: true })), note: '' }
   const turns = separateSpeakers(pcm, rate)
@@ -80,7 +79,9 @@ export function planHearing(pcm: Float32Array, rate: number, separate: boolean, 
   if (ids.length < 2) {
     return { pieces: whole.map((span) => ({ ...span, label: '', stitch: true })), note: '声は一人分でした。' }
   }
-  const names = namesForSpeakers(ids, turns, attendees)
+  const order: number[] = []
+  for (const turn of turns) if (!order.includes(turn.speaker)) order.push(turn.speaker)
+  const labelOf = (speaker: number) => `話者${order.indexOf(speaker) + 1}`
   const pieces: HearingPiece[] = []
   for (const turn of turns) {
     const slice = pcm.subarray(turn.start, turn.end)
@@ -89,14 +90,10 @@ export function planHearing(pcm: Float32Array, rate: number, separate: boolean, 
       end: turn.start + part.end,
     }))
     parts.forEach((part, index) => {
-      pieces.push({ ...part, label: names.get(turn.speaker) ?? `話者${turn.speaker + 1}`, stitch: index > 0 })
+      pieces.push({ ...part, label: labelOf(turn.speaker), stitch: index > 0 })
     })
   }
-  const named = names.size > 0 && [...names.values()].some((label) => !label.startsWith('話者'))
-  const note = named
-    ? `声の違いで${ids.length}人に分け、話し始めた順に出席者名を付けました。`
-    : `声の違いで${ids.length}人に分けました。人の名前は声だけでは決まりません。`
-  return { pieces, note }
+  return { pieces, note: `声の違いで${ids.length}人に分けました。` }
 }
 
 export function separateSpeakers(pcm: Float32Array, rate: number): (Span & { speaker: number })[] {
@@ -129,17 +126,6 @@ export function separateSpeakers(pcm: Float32Array, rate: number): (Span & { spe
     turns.push({ ...segment, speaker })
   }
   return turns
-}
-
-function namesForSpeakers(ids: number[], turns: (Span & { speaker: number })[], attendees: string): Map<number, string> {
-  const order: number[] = []
-  for (const turn of turns) if (!order.includes(turn.speaker)) order.push(turn.speaker)
-  const names = splitAttendees(attendees)
-  const map = new Map<number, string>()
-  ids.forEach((id) => map.set(id, `話者${order.indexOf(id) + 1}`))
-  if (names.length !== order.length) return map
-  order.forEach((id, index) => map.set(id, names[index] || map.get(id) || `話者${index + 1}`))
-  return map
 }
 
 function speechSegments(pcm: Float32Array, rate: number): Span[] {
