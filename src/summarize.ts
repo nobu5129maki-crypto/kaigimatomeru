@@ -41,7 +41,7 @@ export const STYLE_GROUPS: { id: StyleGroup; label: string }[] = [
 ]
 
 export const STYLES: Record<StyleId, { label: string; hint: string; group: StyleGroup }> = {
-  titled: { label: '見出しをつける', hint: 'タイトルをつけ、候補を3つ出します', group: 'shape' },
+  titled: { label: '見出しをつける', hint: 'タイトルを一つつけます', group: 'shape' },
   bullets: { label: '箇条書き', hint: '一つのことずつ、行を分けます', group: 'shape' },
   titledList: { label: '見出しと箇条書き', hint: '見出しの下を、項目だけで読みます', group: 'shape' },
   lead: { label: '結論からはじめる', hint: '最初に決まったこと、あとから経緯です', group: 'shape' },
@@ -50,9 +50,9 @@ export const STYLES: Record<StyleId, { label: string; hint: string; group: Style
   todo: { label: 'やること', hint: '誰が何をするかを項目にします', group: 'shape' },
   flash: { label: '速報', hint: '見出しと、いま分かっている要点です', group: 'shape' },
   fivew: { label: '5W1H', hint: '何を、なぜ、いつ、どこで、どのようにに分けます', group: 'shape' },
-  report: { label: '報告書', hint: '要旨、本文、このあとの三段です', group: 'shape' },
+  report: { label: '報告書', hint: '要旨、本文、やることに分けます', group: 'shape' },
   news: { label: '新聞記事', hint: '見出し、リード、本文の順です', group: 'voice' },
-  politics: { label: '政治記者風', hint: '決まったこと、論点、このあとに分けます', group: 'voice' },
+  politics: { label: '政治記者風', hint: '決まったこと、論点、宿題、次回に分けます', group: 'voice' },
   memo: { label: '読みやすいメモ', hint: '話した順に、要点だけを残します', group: 'voice' },
   minutes: { label: '議事録', hint: '決定・宿題・確認・次回に分けます', group: 'record' },
   mail: { label: '社内連絡', hint: '件名つきで、そのまま送れる形です', group: 'record' },
@@ -573,17 +573,16 @@ function headlineOf(units: Unit[]): string {
 }
 
 function renderTitled(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
-  const candidates = titleCandidates(units)
-  const blocks: SummaryBlock[] = []
-  if (candidates.length > 0) blocks.push({ heading: '見出しの候補', lines: candidates, list: true })
-  blocks.push(...kindBlocks(units, [
-    ['decision', '決まったこと'],
-    ['action', 'このあと'],
-    ['issue', '残っていること'],
-    ['schedule', 'いつ'],
-    ['fact', '分かっていること'],
-  ]))
-  return { headline: candidates[0] || headlineOf(units), blocks }
+  return {
+    headline: titleCandidates(units)[0] || headlineOf(units),
+    blocks: kindBlocks(units, [
+      ['decision', '決まったこと'],
+      ['action', 'やること'],
+      ['issue', '残っていること'],
+      ['schedule', 'いつ'],
+      ['fact', '分かっていること'],
+    ]),
+  }
 }
 
 function renderPoint(units: Unit[]): { headline: string; blocks: SummaryBlock[] } {
@@ -683,7 +682,7 @@ function renderReport(units: Unit[]): { headline: string; blocks: SummaryBlock[]
   const middle = clausesOf(body)
   if (middle.length > 0) blocks.push({ heading: '本文', lines: middle })
   const next = clausesOf(later)
-  if (next.length > 0) blocks.push({ heading: 'このあと', lines: next, list: true })
+  if (next.length > 0) blocks.push({ heading: 'やること', lines: next, list: true })
   return { headline: titleCandidates(units)[0] || gist || headlineOf(units), blocks }
 }
 
@@ -840,7 +839,7 @@ function renderPolitics(units: Unit[]): { headline: string; blocks: SummaryBlock
     ['decision', '決まったこと'],
     ['issue', '論点'],
     ['action', '宿題'],
-    ['schedule', 'このあと'],
+    ['schedule', '次回'],
     ['fact', '確認されたこと'],
   ]
   const blocks: SummaryBlock[] = []

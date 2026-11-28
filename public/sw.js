@@ -1,4 +1,4 @@
-const CACHE = 'kaigimatomeru-v29'
+const CACHE = 'kaigimatomeru-v30'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
