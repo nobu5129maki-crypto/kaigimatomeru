@@ -31,6 +31,27 @@ describe('前後の文から語を選ぶ', () => {
     expect(chooseWords('高校生が参加します。')).toBe('高校生が参加します。')
   })
 
+  it('前の文が歌会なら単価を短歌にする', () => {
+    expect(chooseWords('来月は歌会です。単価を一首詠みます。')).toBe('来月は歌会です。短歌を一首詠みます。')
+    expect(chooseWords('歌会で詠んだ、単価を誌面に載せます。')).toBe('歌会で詠んだ、短歌を誌面に載せます。')
+  })
+
+  it('隣の文が円でも、歌の文の短歌は残す', () => {
+    const text = '短歌を一首紹介します。会場費は500円です。'
+    expect(chooseWords(text)).toBe(text)
+    expect(chooseWords('印刷費は1枚10円です。短歌を歌会で詠みます。')).toBe('印刷費は1枚10円です。短歌を歌会で詠みます。')
+  })
+
+  it('同じ文の値段なら短歌を単価にし、歌の隣でも単価は残す', () => {
+    expect(chooseWords('この部品の短歌は980円です。')).toBe('この部品の単価は980円です。')
+    expect(chooseWords('部品の単価は40円です。歌会の案内は別紙です。')).toBe('部品の単価は40円です。歌会の案内は別紙です。')
+  })
+
+  it('前の文の道路で重大を渋滞にし、病院の次の重大は重体にする', () => {
+    expect(chooseWords('首都高を通りました。重大を確認しました。')).toBe('首都高を通りました。渋滞を確認しました。')
+    expect(chooseWords('病院へ搬送しました。重大です。')).toBe('病院へ搬送しました。重体です。')
+  })
+
   it('例文と、一度選んだ文は変えない', () => {
     expect(chooseWords(SAMPLE_TRANSCRIPT)).toBe(SAMPLE_TRANSCRIPT)
     const fixed = chooseWords('首都高の重大を確認しました。')
